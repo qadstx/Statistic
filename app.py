@@ -26,6 +26,10 @@ def parse_spec_from_col(col_name):
         return round(target - tol, 6), target, round(target + tol, 6)
     return 0.3265, 0.3280, 0.3295
 
+def fmt6(v):
+    """แสดง 6 significant digits แบบ Minitab (ตัดศูนย์ท้ายทิ้ง)"""
+    return np.format_float_positional(float(v), precision=6, unique=False, fractional=False, trim='-')
+
 # --- ค่าคงที่ unbiasing ตาม Minitab ---
 def c4(n):
     return np.sqrt(2.0 / (n - 1)) * np.exp(gammaln(n / 2.0) - gammaln((n - 1) / 2.0))
@@ -319,53 +323,105 @@ def create_capability(df_in, col_name, grp_col, cav_val, lsl, target, usl, subgr
     t0 = np.ceil(ax_lo / step - 1e-9) * step
     ticks = np.arange(t0, ax_hi + step * 1e-6, step)
 
-    # Bin กว้าง = 1 ใน 4 ของระยะ tick โดยให้จุดกึ่งกลาง bin ตรงกับ tick
     BIN_DIV = 8  # ยิ่งมากยิ่งถี่ (แท่งแคบลง)
     bin_w = step / BIN_DIV
     b_start = t0 - bin_w / 2
     b_start += np.floor((d_min - b_start) / bin_w) * bin_w
     b_end = b_start + bin_w * (np.floor((d_max - b_start) / bin_w) + 1)
-
     x_grid = np.linspace(ax_lo, ax_hi, 400)
+
+    RED, GREEN, GRAY = "#8B1A1A", "#0B6623", "#555555"
+    FONT = "Segoe UI, Arial, sans-serif"
 
     fig = go.Figure()
     fig.add_trace(go.Histogram(
-        x=data, histnorm='probability density', name='Data', showlegend=False,
+        x=data, histnorm='probability density', showlegend=False,
         xbins=dict(start=b_start, end=b_end, size=bin_w),
-        marker_color="#6C9BD2",
-        marker_line=dict(color="#1F3E7A", width=0.8)
+        marker_color="#7DA6D9", marker_line=dict(color="#1F3E7A", width=0.8)
     ))
     if std_overall > 0:
         fig.add_trace(go.Scatter(x=x_grid, y=stats.norm.pdf(x_grid, mean, std_overall),
-                                 mode='lines', name='Overall', line=dict(color='#8B1A1A', width=1.6)))
+                                 mode='lines', showlegend=False, line=dict(color=RED, width=1.8)))
     if std_within > 0:
         fig.add_trace(go.Scatter(x=x_grid, y=stats.norm.pdf(x_grid, mean, std_within),
-                                 mode='lines', name='Within', line=dict(color='#555555', width=1.6, dash='dash')))
+                                 mode='lines', showlegend=False, line=dict(color=GRAY, width=1.8, dash='dash')))
 
-    for xv, colr, lbl in [(lsl, "red", "LSL"), (target, "#333333", "Target"), (usl, "red", "USL")]:
-        fig.add_vline(x=xv, line_dash="dot", line_color=colr, line_width=1.3)
-        fig.add_annotation(x=xv, y=1, yref="paper", text=f"<b>{lbl}</b>", showarrow=False,
-                           yanchor="bottom", font=dict(color=colr, size=12))
+    PLOT_TOP = 0.865
+    for xv, colr, lbl in [(lsl, RED, "LSL"), (target, GREEN, "Target"), (usl, RED, "USL")]:
+        fig.add_vline(x=xv, line_dash="dash", line_color=colr, line_width=1.2)
+        fig.add_annotation(x=xv, xref="x", y=PLOT_TOP, yref="paper", text=lbl, showarrow=False,
+                           yanchor="bottom", yshift=3, font=dict(color=colr, size=15, family=FONT))
+
+    def _t(x, y, text, anchor="left", size=14, italic=False, bold=False):
+        txt = f"<b>{text}</b>" if bold else text
+        txt = f"<i>{txt}</i>" if italic else txt
+        fig.add_annotation(x=x, y=y, xref="paper", yref="paper", text=txt, showarrow=False,
+                           xanchor=anchor, yanchor="middle", font=dict(size=size, color="#222222", family=FONT))
 
     title_suffix = f" (Cavity: {cav_val})" if cav_val != "ทั้งหมด (Combined)" else ""
+    _t(0.5, 0.955, f"Process Capability Report for {col_name}{title_suffix}", "center", 24)
+
+    # ตาราง Process Data (ซ้าย)
+    _t(0.155, 0.838, "Process Data", "center")
+    for yy, (lb, vv) in zip(
+        [0.812, 0.784, 0.758, 0.730, 0.702, 0.673, 0.646],
+        [("LSL", fmt6(lsl)), ("Target", fmt6(target)), ("USL", fmt6(usl)), ("Sample Mean", fmt6(mean)),
+         ("Sample N", f"{n}"), ("StDev(Overall)", fmt6(std_overall)), ("StDev(Within)", fmt6(std_within))]):
+        _t(0.03, yy, lb)
+        _t(0.152, yy, vv)
+
+    # Legend (ขวาบน)
+    fig.add_shape(type="line", xref="paper", yref="paper", x0=0.748, x1=0.800, y0=0.840, y1=0.840,
+                  line=dict(color=RED, width=2))
+    fig.add_shape(type="line", xref="paper", yref="paper", x0=0.748, x1=0.800, y0=0.812, y1=0.812,
+                  line=dict(color=GRAY, width=2, dash="dash"))
+    _t(0.809, 0.840, "Overall")
+    _t(0.809, 0.812, "Within")
+
+    # Capability Indices (ขวา)
+    _t(0.863, 0.759, "Overall Capability", "center")
+    for yy, (lb, vv) in zip([0.731, 0.705, 0.677, 0.649, 0.621],
+                            [("Pp", pp), ("PPL", ppl), ("PPU", ppu), ("Ppk", ppk), ("Cpm", cpm)]):
+        _t(0.815, yy, lb)
+        _t(0.878, yy, f"{vv:.2f}")
+    _t(0.862, 0.586, "Potential (Within) Capability", "center")
+    for yy, (lb, vv) in zip([0.552, 0.524, 0.496, 0.468],
+                            [("Cp", cp), ("CPL", cpl), ("CPU", cpu), ("Cpk", cpk)]):
+        _t(0.815, yy, lb)
+        _t(0.878, yy, f"{vv:.2f}")
+
+    # ตาราง Performance (ล่าง)
+    col_x = [0.2227, 0.381, 0.5346]
+    _t(0.284, 0.216, "Performance", "center")
+    for cx, hd in zip(col_x, ["Observed", "Expected Overall", "Expected Within"]):
+        _t(cx, 0.189, hd, "right")
+    perf_rows = [
+        ("PPM < LSL", [obs_below, exp_below_ovr, exp_below_wit], 0.162),
+        ("PPM > USL", [obs_above, exp_above_ovr, exp_above_wit], 0.134),
+        ("PPM Total", [obs_total, exp_total_ovr, exp_total_wit], 0.107),
+    ]
+    for lb, vals, yy in perf_rows:
+        _t(0.036, yy, lb)
+        for cx, vv in zip(col_x, vals):
+            _t(cx, yy, f"{vv:.2f}", "right")
+
+    _t(0.02, 0.025, "The actual process spread is represented by 6 sigma.", "left", 17, italic=True)
+
     fig.update_layout(
-        title=dict(text=f"<b>Process Capability Report for {col_name}{title_suffix}</b>", x=0.5, xanchor='center'),
-        xaxis=dict(range=[ax_lo, ax_hi], tickmode='array', tickvals=ticks,
-                   ticktext=[f"{t:.{dec}f}" for t in ticks], tickangle=-60, showgrid=False),
-        yaxis=dict(showgrid=False, showticklabels=False, zeroline=False),
-        bargap=0,
-        legend=dict(x=1.01, y=1, xanchor='left', yanchor='top'),
-        plot_bgcolor="white",
-        paper_bgcolor="#E8E8E8",
-        height=chart_height,
-        margin=dict(l=40, r=90, t=75, b=70)
+        xaxis=dict(domain=[0.306, 0.721], range=[ax_lo, ax_hi], tickmode='array', tickvals=ticks,
+                   ticktext=[f"{t:.{dec}f}" for t in ticks], tickangle=-45, tickfont=dict(size=14, family=FONT),
+                   showgrid=True, gridcolor="#E6E6E6", showline=True, linecolor="#888888", mirror=True),
+        yaxis=dict(domain=[0.359, PLOT_TOP], showticklabels=False, showgrid=True, gridcolor="#E6E6E6",
+                   zeroline=False, showline=True, linecolor="#888888", mirror=True, nticks=6),
+        bargap=0, showlegend=False,
+        plot_bgcolor="white", paper_bgcolor="#DDDDDD",
+        height=720, margin=dict(l=0, r=0, t=0, b=0)
     )
-    fig.update_xaxes(showline=True, linewidth=1, linecolor='#999999', mirror=True)
-    fig.update_yaxes(showline=True, linewidth=1, linecolor='#999999', mirror=True)
 
     metrics = {
         "N": n, "Mean": mean, "StDev(Overall)": std_overall, "StDev(Within)": std_within,
         "Cp": cp, "Cpk": cpk, "Pp": pp, "Ppk": ppk, "Cpm": cpm,
+        "PPL": ppl, "PPU": ppu, "CPL": cpl, "CPU": cpu,
         "Obs_Below": obs_below, "Obs_Above": obs_above, "Obs_Total": obs_total,
         "Exp_Ovr_Below": exp_below_ovr, "Exp_Ovr_Above": exp_above_ovr, "Exp_Ovr_Total": exp_total_ovr,
         "Exp_Wit_Below": exp_below_wit, "Exp_Wit_Above": exp_above_wit, "Exp_Wit_Total": exp_total_wit
@@ -510,41 +566,7 @@ with tab2:
         fig_c, m = create_capability(edited_df, selected_col, group_col, cavity_filter,
                                      lsl_input, target_input, usl_input, subgroup_size)
         if m:
-            col_l, col_m, col_r = st.columns([1.1, 2.5, 1.1])
-            with col_l:
-                st.markdown("##### 📋 Process Data")
-                st.dataframe(pd.DataFrame({
-                    "Metric": ["LSL", "Target", "USL", "Sample Mean", "Sample N", "StDev(Overall)", "StDev(Within)"],
-                    "Value": [f"{lsl_input:.4f}", f"{target_input:.4f}", f"{usl_input:.4f}", f"{m['Mean']:.6f}", f"{m['N']}", f"{m['StDev(Overall)']:.7f}", f"{m['StDev(Within)']:.7f}"]
-                }).set_index("Metric"), use_container_width=True)
-            with col_m:
-                st.plotly_chart(fig_c, use_container_width=True)
-
-                st.markdown("##### 📊 Performance (PPM)")
-                perf_df = pd.DataFrame({
-                    "Performance": ["PPM < LSL", "PPM > USL", "PPM Total"],
-                    "Observed": [f"{m['Obs_Below']:.2f}", f"{m['Obs_Above']:.2f}", f"{m['Obs_Total']:.2f}"],
-                    "Expected Overall": [f"{m['Exp_Ovr_Below']:.2f}", f"{m['Exp_Ovr_Above']:.2f}", f"{m['Exp_Ovr_Total']:.2f}"],
-                    "Expected Within": [f"{m['Exp_Wit_Below']:.2f}", f"{m['Exp_Wit_Above']:.2f}", f"{m['Exp_Wit_Total']:.2f}"]
-                }).set_index("Performance")
-                st.dataframe(perf_df, use_container_width=True)
-
-            with col_r:
-                st.markdown("##### 🏆 Capability Indices")
-                st.dataframe(pd.DataFrame({
-                    "Index": ["Pp", "PPL", "PPU", "Ppk", "Cpm", "Cp", "CPL", "CPU", "Cpk"],
-                    "Value": [
-                        f"{m['Pp']:.2f}",
-                        f"{(m['Mean']-lsl_input)/(3*m['StDev(Overall)'] if m['StDev(Overall)'] > 0 else 1):.2f}",
-                        f"{(usl_input-m['Mean'])/(3*m['StDev(Overall)'] if m['StDev(Overall)'] > 0 else 1):.2f}",
-                        f"{m['Ppk']:.2f}",
-                        f"{m['Cpm']:.2f}",
-                        f"{m['Cp']:.2f}",
-                        f"{(m['Mean']-lsl_input)/(3*m['StDev(Within)'] if m['StDev(Within)'] > 0 else 1):.2f}",
-                        f"{(usl_input-m['Mean'])/(3*m['StDev(Within)'] if m['StDev(Within)'] > 0 else 1):.2f}",
-                        f"{m['Cpk']:.2f}"
-                    ]
-                }).set_index("Index"), use_container_width=True)
+            st.plotly_chart(fig_c, use_container_width=True)
 
             with st.expander("🔬 วินิจฉัย: เทียบกับค่าใน Minitab (เปิดดูว่าวิธีไหนตรง)", expanded=False):
                 _d = get_filtered_data(edited_df, selected_col, group_col, cavity_filter)[selected_col]
@@ -556,13 +578,13 @@ with tab2:
             st.warning("ข้อมูลไม่เพียงพอสำหรับการคำนวณในกลุ่มที่เลือก")
     else:
         st.subheader(f"📈 แสดง Process Capability ทั้งหมด ({len(cols_to_plot)} พอยต์ - {cavity_filter})")
-        grid_cols = st.columns(2)
+        grid_cols = st.columns(1)
         for idx, col_name in enumerate(cols_to_plot):
             c_lsl, c_target, c_usl = parse_spec_from_col(col_name)
             fig_c, m = create_capability(edited_df, col_name, group_col, cavity_filter,
                                          c_lsl, c_target, c_usl, subgroup_size)
             if m:
-                with grid_cols[idx % 2]:
+                with grid_cols[0]:
                     st.plotly_chart(fig_c, use_container_width=True)
                     st.caption(f"**{col_name}** | N: {m['N']} | Mean: `{m['Mean']:.5f}` | **Cp:** `{m['Cp']:.2f}` | **Cpk:** `{m['Cpk']:.2f}` | **Ppk:** `{m['Ppk']:.2f}`")
                     st.divider()
@@ -635,78 +657,81 @@ with tab3:
                     st.plotly_chart(fig_p, use_container_width=True)
 
 
+
 # ==============================================================================
-# Export กราฟทั้งหมดตาม Setting ปัจจุบัน เป็นไฟล์รูปภาพ (ZIP)
-# ต้องติดตั้ง: pip install -U kaleido pillow
+# Export กราฟเป็นรูปภาพ แยก ZIP ตามชนิดกราฟ (หนึ่งพอยต์ = หนึ่งภาพ)
+# ต้องติดตั้ง: pip install kaleido==0.2.1 plotly==5.24.1
 # ==============================================================================
-def build_export_zip(points, combine, img_w):
-    from PIL import Image
-    zip_buf = BytesIO()
+EXPORT_TYPES = ["Boxplot", "Process Capability", "Probability Plot"]
+EXPORT_FILE = {"Boxplot": "boxplot", "Process Capability": "process_capability", "Probability Plot": "probability_plot"}
+
+def build_export_zips(points, types, img_w, img_h):
     cav_tag = "" if cavity_filter == "ทั้งหมด (Combined)" else f"_Cavity{cavity_filter}"
-    with zipfile.ZipFile(zip_buf, "w", zipfile.ZIP_DEFLATED) as zf:
-        for i, col_name in enumerate(points, 1):
-            if "Show ทีละกราฟ" in view_mode and col_name == selected_col:
-                c_lsl, c_target, c_usl = lsl_input, target_input, usl_input
-            else:
-                c_lsl, c_target, c_usl = parse_spec_from_col(col_name)
+    files = {t: [] for t in types}
+    for i, col_name in enumerate(points, 1):
+        if "Show ทีละกราฟ" in view_mode and col_name == selected_col:
+            c_lsl, c_target, c_usl = lsl_input, target_input, usl_input
+        else:
+            c_lsl, c_target, c_usl = parse_spec_from_col(col_name)
+        safe = re.sub(r"[^0-9A-Za-z._-]+", "_", str(col_name)).strip("_")
+        base = f"{i:02d}_{safe}{cav_tag}"
 
-            figs = [("boxplot", create_boxplot(edited_df, col_name, group_col, c_lsl, c_target, c_usl))]
-            fig_c, _m = create_capability(edited_df, col_name, group_col, cavity_filter,
-                                          c_lsl, c_target, c_usl, subgroup_size)
-            if fig_c is not None:
-                figs.append(("capability", fig_c))
-            fig_p = create_prob_plot(edited_df, col_name, group_col, cavity_filter)[0]
-            if fig_p is not None:
-                figs.append(("probplot", fig_p))
+        if "Boxplot" in types:
+            f = create_boxplot(edited_df, col_name, group_col, c_lsl, c_target, c_usl)
+            files["Boxplot"].append((f"{base}_boxplot.png",
+                                     f.to_image(format="png", width=img_w, height=img_h, scale=2)))
+        if "Process Capability" in types:
+            f, _m = create_capability(edited_df, col_name, group_col, cavity_filter,
+                                      c_lsl, c_target, c_usl, subgroup_size)
+            if f is not None:
+                files["Process Capability"].append((f"{base}_capability.png",
+                                                    f.to_image(format="png", width=1000, height=720, scale=2)))
+        if "Probability Plot" in types:
+            f = create_prob_plot(edited_df, col_name, group_col, cavity_filter)[0]
+            if f is not None:
+                files["Probability Plot"].append((f"{base}_probplot.png",
+                                                  f.to_image(format="png", width=img_w, height=img_h, scale=2)))
 
-            pngs = [(kind, f.to_image(format="png", width=img_w, height=chart_height, scale=2))
-                    for kind, f in figs]
-            safe = re.sub(r"[^0-9A-Za-z._-]+", "_", str(col_name)).strip("_")
-            base = f"{i:02d}_{safe}{cav_tag}"
-
-            if combine:
-                ims = [Image.open(BytesIO(b)).convert("RGB") for _, b in pngs]
-                total_w = sum(im.width for im in ims)
-                canvas = Image.new("RGB", (total_w, max(im.height for im in ims)), "white")
-                x_off = 0
-                for im in ims:
-                    canvas.paste(im, (x_off, 0))
-                    x_off += im.width
-                out = BytesIO()
-                canvas.save(out, format="PNG")
-                zf.writestr(f"{base}.png", out.getvalue())
-            else:
-                for kind, b in pngs:
-                    zf.writestr(f"{base}_{kind}.png", b)
-    return zip_buf.getvalue()
+    zips = {}
+    for t, items in files.items():
+        buf = BytesIO()
+        with zipfile.ZipFile(buf, "w", zipfile.ZIP_DEFLATED) as zf:
+            for name, b in items:
+                zf.writestr(name, b)
+        zips[t] = buf.getvalue()
+    if len(types) > 1:
+        buf = BytesIO()
+        with zipfile.ZipFile(buf, "w", zipfile.ZIP_DEFLATED) as zf:
+            for t, items in files.items():
+                for name, b in items:
+                    zf.writestr(f"{EXPORT_FILE[t]}/{name}", b)
+        zips["ทั้งหมด"] = buf.getvalue()
+    return zips
 
 with st.sidebar:
     st.header("🖼️ 4. Export รูปภาพ")
     export_cols = st.multiselect("พอยต์ที่จะ export:", num_cols, default=num_cols)
-    export_mode = st.radio(
-        "รูปแบบไฟล์:",
-        ["1 ภาพต่อพอยต์ (Boxplot + Capability + Prob Plot เรียงแนวนอน)", "แยกไฟล์ทุกกราฟ (3 ภาพต่อพอยต์)"]
-    )
-    export_w = st.number_input("ความกว้างต่อกราฟ (px)", min_value=500, max_value=1600, value=900, step=100)
-    if st.button("🖼️ สร้างไฟล์ ZIP รูปภาพ", use_container_width=True):
-        if not export_cols:
-            st.warning("เลือกพอยต์อย่างน้อย 1 ตัว")
+    export_types = st.multiselect("ชนิดกราฟ:", EXPORT_TYPES, default=EXPORT_TYPES)
+    ec1, ec2 = st.columns(2)
+    with ec1:
+        export_w = st.number_input("กว้าง (px)", min_value=300, max_value=1600, value=600, step=50)
+    with ec2:
+        export_h = st.number_input("สูง (px)", min_value=300, max_value=1200, value=480, step=20)
+    st.caption("ขนาดนี้ใช้กับ Boxplot และ Probability Plot ส่วน Process Capability ใช้ขนาดรายงาน 1000×720 คงที่")
+    if st.button("🖼️ สร้างรูป", use_container_width=True):
+        if not export_cols or not export_types:
+            st.warning("เลือกพอยต์และชนิดกราฟอย่างน้อยอย่างละ 1")
         else:
             try:
                 with st.spinner(f"กำลังสร้างรูป {len(export_cols)} พอยต์..."):
-                    st.session_state.export_zip = build_export_zip(
-                        export_cols, export_mode.startswith("1 ภาพ"), int(export_w)
-                    )
+                    st.session_state.export_zips = build_export_zips(
+                        export_cols, export_types, int(export_w), int(export_h))
             except Exception as e:
-                st.session_state.pop("export_zip", None)
-                st.error(f"สร้างรูปไม่สำเร็จ: {e}\n\nลอง: pip install -U kaleido pillow "
-                         "(ถ้าใช้ plotly 6.1+ กับ kaleido 1.x ต้องมี Chrome: รัน plotly_get_chrome)")
-    if "export_zip" in st.session_state:
-        st.download_button(
-            "⬇️ ดาวน์โหลด ZIP รูปภาพ",
-            data=st.session_state.export_zip,
-            file_name="capability_charts.zip",
-            mime="application/zip",
-            use_container_width=True
-        )
-        st.caption("ถ้าเปลี่ยนค่า/Setting ให้กดสร้างใหม่ทุกครั้ง")
+                st.session_state.pop("export_zips", None)
+                st.error(f"สร้างรูปไม่สำเร็จ: {e}\n\nลอง: pip install kaleido==0.2.1 plotly==5.24.1")
+    if "export_zips" in st.session_state:
+        for _t_name, _bytes in st.session_state.export_zips.items():
+            _fname = "all_charts.zip" if _t_name == "ทั้งหมด" else f"{EXPORT_FILE[_t_name]}.zip"
+            st.download_button(f"⬇️ {_t_name} (.zip)", data=_bytes, file_name=_fname,
+                               mime="application/zip", use_container_width=True, key=f"dl_{_t_name}")
+        st.caption("ถ้าเปลี่ยน setting ให้กดสร้างรูปใหม่ทุกครั้ง")
