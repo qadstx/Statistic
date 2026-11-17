@@ -228,7 +228,9 @@ def create_capability(df_in, col_name, grp_col, cav_val, lsl, target, usl):
     mean = data.mean()
     std_overall = data.std(ddof=1) if n > 1 else 0.0001
     
+    # คำนวณ StDev(Within) ให้ตรงกับ Minitab เป๊ะ
     if grp_col != "ไม่แยกกลุ่ม" and cav_val == "ทั้งหมด (Combined)" and grp_col in valid_df.columns:
+        # กรณีรวมกลุ่ม (Combined): ใช้ Pooled Variance ระหว่าง Cavity
         subgroups = []
         for _, grp_df in valid_df.groupby(grp_col):
             if len(grp_df) > 1:
@@ -239,6 +241,7 @@ def create_capability(df_in, col_name, grp_col, cav_val, lsl, target, usl):
         else:
             std_within = std_overall
     else:
+        # กรณีดู Cavity เดี่ยวๆ (เช่น Cavity 1 หรือไม่แยกกลุ่ม): ใช้ Moving Range (MR / 1.128) ตามมาตรฐาน Minitab
         mr = np.abs(np.diff(data))
         std_within = mr.mean() / 1.128 if len(mr) > 0 and mr.mean() > 0 else std_overall
 
