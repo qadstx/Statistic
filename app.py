@@ -63,6 +63,9 @@ if "df" not in st.session_state:
     df_init.index.name = "Row"
     st.session_state.df = df_init
 
+if "editor_ver" not in st.session_state:
+    st.session_state.editor_ver = 0
+
 if uploaded_file is not None:
     if st.sidebar.button("📥 โหลดข้อมูลจากไฟล์", use_container_width=True):
         if uploaded_file.name.endswith(".csv"):
@@ -72,26 +75,30 @@ if uploaded_file is not None:
         temp_df.index = np.arange(1, len(temp_df) + 1)
         temp_df.index.name = "Row"
         st.session_state.df = temp_df
+        st.session_state.editor_ver += 1
 
 if st.sidebar.button("🧹 ล้างตาราง (สร้างตารางเปล่า)", use_container_width=True):
     empty_df = pd.DataFrame({"B1_0.328 ± 0.0015": [np.nan]*10, "Cavity": [1]*10})
     empty_df.index = np.arange(1, len(empty_df) + 1)
     empty_df.index.name = "Row"
     st.session_state.df = empty_df
+    st.session_state.editor_ver += 1
 
 st.session_state.df.index = np.arange(1, len(st.session_state.df) + 1)
 st.session_state.df.index.name = "Row"
 
 with st.expander("📝 ตารางข้อมูล (มีเลขแถว Row ชัดเจน / ดับเบิลคลิกแก้ไขตัวเลข / ก๊อปวางจาก Excel ได้ทันที)", expanded=True):
+    _cfg = {"_index": st.column_config.NumberColumn("Row #", help="ลำดับแถวข้อมูล", format="%d")}
+    for _c in st.session_state.df.columns:
+        if str(_c).lower() != "cavity" and pd.api.types.is_numeric_dtype(st.session_state.df[_c]):
+            _cfg[_c] = st.column_config.NumberColumn(format="%.5f", step=0.00001)
     edited_df = st.data_editor(
         st.session_state.df,
         num_rows="dynamic",
         use_container_width=True,
         hide_index=False,
-        column_config={
-            "_index": st.column_config.NumberColumn("Row #", help="ลำดับแถวข้อมูล", format="%d")
-        },
-        key="data_editor"
+        column_config=_cfg,
+        key=f"data_editor_{st.session_state.editor_ver}"
     )
     edited_df.index = np.arange(1, len(edited_df) + 1)
     edited_df.index.name = "Row"
@@ -125,6 +132,7 @@ with col_c2:
     box_line_hex = st.color_picker("สีเส้นขอบ", "#333333")
 
 box_width_val = st.sidebar.slider("ความอ้วนของกล่อง Boxplot", 0.15, 0.70, 0.35, 0.05)
+box_gap_val = st.sidebar.slider("ระยะห่างระหว่างกล่อง Boxplot (น้อย = ชิด)", 0.3, 2.5, 1.0, 0.1)
 chart_height = st.sidebar.slider("ความสูงของกราฟ (px)", 380, 700, 480, 20)
 
 st.sidebar.header("⚙️ 3. ตั้งค่าตัวแปรและ Spec")
@@ -182,14 +190,20 @@ def create_boxplot(df_in, col_name, grp_col, lsl, target, usl):
 
     fig = go.Figure()
     fill_rgba = hex_to_rgba(box_fill_hex, 0.85)
+    tick_pos, tick_txt = [], []
+    n_g = valid_df[grp_col].nunique() if grp_col != "ไม่แยกกลุ่ม" else 1
+    bw = min(box_width_val, box_gap_val * 0.95) if n_g > 1 else box_width_val
 
     if grp_col != "ไม่แยกกลุ่ม":
-        for grp, grp_df in valid_df.groupby(grp_col):
+        for gi, (grp, grp_df) in enumerate(valid_df.groupby(grp_col)):
+            pos = gi * box_gap_val
+            tick_pos.append(pos)
+            tick_txt.append(str(grp))
             fig.add_trace(go.Box(
-                x=[str(grp)] * len(grp_df),
+                x=[pos] * len(grp_df),
                 y=grp_df[col_name],
                 name=f"{grp_col} {grp}",
-                width=box_width_val,
+                width=bw,
                 boxpoints='outliers',
                 customdata=grp_df["Row_ID"],
                 hovertemplate="<b>Row #: %{customdata}</b><br>Value: %{y:.5f}<extra></extra>",
@@ -198,11 +212,12 @@ def create_boxplot(df_in, col_name, grp_col, lsl, target, usl):
                 marker=dict(color="red", size=7, symbol="asterisk")
             ))
     else:
+        tick_pos, tick_txt = [0], [col_name]
         fig.add_trace(go.Box(
-            x=[col_name] * len(valid_df),
+            x=[0] * len(valid_df),
             y=valid_df[col_name],
             name=col_name,
-            width=box_width_val,
+            width=bw,
             boxpoints='outliers',
             customdata=valid_df["Row_ID"],
             hovertemplate="<b>Row #: %{customdata}</b><br>Value: %{y:.5f}<extra></extra>",
@@ -222,6 +237,10 @@ def create_boxplot(df_in, col_name, grp_col, lsl, target, usl):
     y_max = max(usl, valid_df[col_name].max()) if len(valid_df) > 0 else usl
     span = y_max - y_min if y_max > y_min else 0.003
 
+    n_b = len(tick_pos)
+    x_span = max((n_b - 1) * box_gap_val + 1.0, 2.0) if n_b > 1 else 1.0
+    x_mid = (tick_pos[0] + tick_pos[-1]) / 2 if n_b > 0 else 0
+
     fig.update_layout(
         title=dict(text=f"<b>Boxplot of {col_name}</b>", x=0.5, xanchor='center'),
         xaxis_title=grp_col if grp_col != "ไม่แยกกลุ่ม" else "",
@@ -232,7 +251,8 @@ def create_boxplot(df_in, col_name, grp_col, lsl, target, usl):
             gridcolor="#EAEAEA",
             zeroline=False
         ),
-        xaxis=dict(type='category', gridcolor="#EAEAEA"),
+        xaxis=dict(tickmode='array', tickvals=tick_pos, ticktext=tick_txt,
+                   range=[x_mid - x_span / 2, x_mid + x_span / 2], gridcolor="#EAEAEA"),
         plot_bgcolor="white",
         paper_bgcolor="#E8E8E8",
         height=chart_height,
@@ -553,7 +573,9 @@ with tab3:
         if n >= 3:
             c1, c2 = st.columns([2.5, 1])
             with c1:
-                st.plotly_chart(fig_p, use_container_width=True)
+                event = st.plotly_chart(fig_p, use_container_width=True, on_select="rerun",
+                                        selection_mode="points",
+                                        key=f"prob_plot_single_{st.session_state.editor_ver}")
             with c2:
                 st.markdown("##### 🎯 Normality Test")
                 if ad_pval >= 0.05:
@@ -563,7 +585,43 @@ with tab3:
                 st.metric("P-Value (Anderson-Darling)", f"{ad_pval:.4f}")
                 st.metric("AD Statistic", f"{ad_stat:.3f}")
                 st.metric("Mean / StDev", f"{mean:.5f} / {std:.6f}")
-                st.info("💡 **ทริค:** เอาเมาส์ชี้จุดที่กระโดดออกจากเส้นเพื่อดูเลข **Row #** แล้วเลื่อนขึ้นไปแก้ตัวเลขที่แถวนั้นในตารางด้านบน กราฟจะอัปเดตทันที!")
+                st.info("💡 **ทริค:** คลิกจุดบนกราฟ (กด Shift ค้างเพื่อเลือกหลายจุด) แล้วใส่ค่าใหม่ในช่องด้านล่าง กดอัปเดต ค่าจะไปแก้ในตารางด้านบนให้ทันที")
+
+            # --- คลิกจุด -> แก้ค่า -> อัปเดตตาราง ---
+            try:
+                _pts = event["selection"]["points"]
+            except Exception:
+                _pts = []
+            _sd = get_filtered_data(edited_df, selected_col, group_col, cavity_filter)
+            _sd = _sd.sort_values(by=selected_col).reset_index(drop=True)
+            _sel_ids = []
+            for _p in _pts:
+                if _p.get("curve_number", 0) != 0:
+                    continue
+                _i = _p.get("point_index", _p.get("point_number"))
+                if _i is not None and 0 <= int(_i) < len(_sd):
+                    _rid = int(_sd.loc[int(_i), "Row_ID"])
+                    if _rid not in _sel_ids:
+                        _sel_ids.append(_rid)
+
+            if _sel_ids:
+                st.markdown("##### ✏️ แก้ค่าจุดที่เลือก")
+                _new_vals = {}
+                _ecols = st.columns(min(len(_sel_ids), 4))
+                for _k, _rid in enumerate(_sel_ids[:8]):
+                    _cur = float(edited_df.loc[_rid, selected_col])
+                    with _ecols[_k % len(_ecols)]:
+                        _new_vals[_rid] = st.number_input(
+                            f"Row #{_rid}", value=_cur, format="%.5f", step=0.00001,
+                            key=f"newval_{selected_col}_{_rid}_{st.session_state.editor_ver}"
+                        )
+                if st.button("✅ อัปเดตค่าลงตาราง", type="primary"):
+                    _new_df = edited_df.copy()
+                    for _rid, _v in _new_vals.items():
+                        _new_df.loc[_rid, selected_col] = _v
+                    st.session_state.df = _new_df
+                    st.session_state.editor_ver += 1
+                    st.rerun()
         else:
             st.warning("ข้อมูลน้อยเกินไปสำหรับการรัน Probability Plot (ต้องการอย่างน้อย 3 แถว)")
     else:
