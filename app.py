@@ -145,7 +145,7 @@ if group_col != "ไม่แยกกลุ่ม" and group_col in edited_df.c
 
 # Subgroup size (ตั้งให้เหมือนที่ใช้ใน Minitab > Capability Analysis)
 subgroup_size = st.sidebar.number_input(
-    "Subgroup size (เหมือนใน Minitab)", min_value=1, value=1, step=1,
+    "Subgroup size (เหมือนใน Minitab)", min_value=1, value=32, step=1,
     help="1 = ใช้ Moving Range, มากกว่า 1 = ใช้ Pooled StDev (หารด้วย c4)"
 )
 
