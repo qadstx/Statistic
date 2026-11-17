@@ -1,0 +1,441 @@
+<!DOCTYPE html>
+<html lang="th">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Minitab DIY</title>
+    <!-- Tailwind CSS -->
+    <script src="https://cdn.tailwindcss.com"></script>
+    <!-- Plotly.js -->
+    <script src="https://cdn.plot.ly/plotly-2.27.0.min.js"></script>
+    <!-- SheetJS (Excel) -->
+    <script src="https://cdn.jsdelivr.net/npm/xlsx@0.18.5/dist/xlsx.full.min.js"></script>
+    <!-- JSZip -->
+    <script src="https://cdn.jsdelivr.net/npm/jszip@3.10.1/dist/jszip.min.js"></script>
+    <!-- jStat สำหรับคำนวณสถิติ Normal Distribution -->
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/jstat/1.9.6/jstat.min.js"></script>
+    <style>
+        body { font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif; background-color: #f3f4f6; }
+    </style>
+</head>
+<body class="p-4 md:p-6">
+
+    <div class="max-w-7xl mx-auto space-y-6">
+        <!-- Header -->
+        <header class="bg-white p-6 rounded-xl shadow-sm flex flex-col md:flex-row justify-between items-center gap-4">
+            <h1 class="text-2xl font-bold text-gray-800">📊 Minitab DIY</h1>
+            <div class="flex flex-wrap gap-3">
+                <input type="file" id="uploadExcel" accept=".xlsx, .xls, .csv" class="hidden">
+                <button onclick="document.getElementById('uploadExcel').click()" class="bg-blue-600 hover:bg-blue-700 text-white px-4 py-2 rounded-lg text-sm font-medium transition">📥 โหลดข้อมูลจากไฟล์</button>
+                <button onclick="clearData()" class="bg-gray-200 hover:bg-gray-300 text-gray-700 px-4 py-2 rounded-lg text-sm font-medium transition">🧹 ล้างตาราง</button>
+                <button onclick="exportExcel()" class="bg-green-600 hover:bg-green-700 text-white px-4 py-2 rounded-lg text-sm font-medium transition">💾 เซฟเป็น Excel</button>
+            </div>
+        </header>
+
+        <!-- Controls & Settings -->
+        <div class="bg-white p-6 rounded-xl shadow-sm grid grid-cols-1 md:grid-cols-4 gap-4 items-center">
+            <div>
+                <label class="block text-xs font-semibold text-gray-600 mb-1">แบ่งกลุ่มตาม (Group by):</label>
+                <select id="groupColSelect" onchange="updateUI()" class="w-full border border-gray-300 rounded-lg p-2 text-sm focus:ring-2 focus:ring-blue-500"></select>
+            </div>
+            <div>
+                <label class="block text-xs font-semibold text-gray-600 mb-1">เลือกกลุ่ม (Filter):</label>
+                <select id="cavitySelect" onchange="updateUI()" class="w-full border border-gray-300 rounded-lg p-2 text-sm focus:ring-2 focus:ring-blue-500"></select>
+            </div>
+            <div>
+                <label class="block text-xs font-semibold text-gray-600 mb-1">เลือกพอยต์วิเคราะห์:</label>
+                <select id="pointSelect" onchange="updateUI()" class="w-full border border-gray-300 rounded-lg p-2 text-sm focus:ring-2 focus:ring-blue-500"></select>
+            </div>
+            <div class="grid grid-cols-3 gap-2">
+                <div>
+                    <label class="block text-xs font-semibold text-gray-600 mb-1">LSL</label>
+                    <input type="number" id="inputLsl" step="0.0001" oninput="updateUI()" class="w-full border border-gray-300 rounded-lg p-2 text-sm text-center">
+                </div>
+                <div>
+                    <label class="block text-xs font-semibold text-gray-600 mb-1">Target</label>
+                    <input type="number" id="inputTarget" step="0.0001" oninput="updateUI()" class="w-full border border-gray-300 rounded-lg p-2 text-sm text-center">
+                </div>
+                <div>
+                    <label class="block text-xs font-semibold text-gray-600 mb-1">USL</label>
+                    <input type="number" id="inputUsl" step="0.0001" oninput="updateUI()" class="w-full border border-gray-300 rounded-lg p-2 text-sm text-center">
+                </div>
+            </div>
+        </div>
+
+        <!-- Data Table Section -->
+        <details class="bg-white rounded-xl shadow-sm p-6" open>
+            <summary class="font-semibold text-gray-700 cursor-pointer">📝 ตารางข้อมูล (ดับเบิลคลิกแก้ไขตัวเลข)</summary>
+            <div class="overflow-x-auto mt-4 max-h-64 border border-gray-200 rounded-lg">
+                <table id="dataTable" class="w-full text-left border-collapse text-sm">
+                    <thead id="tableHead" class="bg-gray-100 sticky top-0"></thead>
+                    <tbody id="tableBody" class="divide-y divide-gray-200"></tbody>
+                </table>
+            </div>
+        </details>
+
+        <!-- Tabs Navigation -->
+        <div class="flex border-b border-gray-300 gap-4">
+            <button onclick="switchTab('box')" id="btnTabBox" class="py-2 px-4 font-semibold border-b-2 border-blue-600 text-blue-600 transition">📦 Boxplot</button>
+            <button onclick="switchTab('cap')" id="btnTabCap" class="py-2 px-4 font-semibold text-gray-500 hover:text-gray-700 transition">📈 Process Capability</button>
+            <button onclick="switchTab('prob')" id="btnTabProb" class="py-2 px-4 font-semibold text-gray-500 hover:text-gray-700 transition">🎯 Probability Plot</button>
+        </div>
+
+        <!-- Tab Contents -->
+        <div id="tabBox" class="bg-white p-6 rounded-xl shadow-sm">
+            <div id="boxplotDiv" class="w-full h-[500px]"></div>
+        </div>
+        <div id="tabCap" class="bg-white p-6 rounded-xl shadow-sm hidden">
+            <div id="capabilityDiv" class="w-full h-[700px]"></div>
+        </div>
+        <div id="tabProb" class="bg-white p-6 rounded-xl shadow-sm hidden">
+            <div id="probPlotDiv" class="w-full h-[550px]"></div>
+        </div>
+    </div>
+
+    <script>
+        // ข้อมูลตั้งต้นจำลอง
+        let rawData = [
+            { Row: 1, "B1_0.328 ± 0.0015": 0.3282, Cavity: 1 },
+            { Row: 2, "B1_0.328 ± 0.0015": 0.3284, Cavity: 1 },
+            { Row: 3, "B1_0.328 ± 0.0015": 0.3281, Cavity: 1 },
+            { Row: 4, "B1_0.328 ± 0.0015": 0.3285, Cavity: 1 },
+            { Row: 5, "B1_0.328 ± 0.0015": 0.3280, Cavity: 2 },
+            { Row: 6, "B1_0.328 ± 0.0015": 0.3283, Cavity: 2 },
+            { Row: 7, "B1_0.328 ± 0.0015": 0.3282, Cavity: 2 },
+            { Row: 8, "B1_0.328 ± 0.0015": 0.3281, Cavity: 2 }
+        ];
+
+        let currentTab = 'box';
+
+        function init() {
+            renderTable();
+            populateDropdowns();
+            updateUI();
+        }
+
+        function renderTable() {
+            if (rawData.length === 0) return;
+            const keys = Object.keys(rawData[0]);
+            
+            let headHtml = `<tr><th class="p-2 border">Row #</th>` + keys.filter(k => k !== 'Row').map(k => `<th class="p-2 border">${k}</th>`).join('') + `</tr>`;
+            document.getElementById('tableHead').innerHTML = headHtml;
+
+            let bodyHtml = '';
+            rawData.forEach((row, rIdx) => {
+                bodyHtml += `<tr class="hover:bg-gray-50"><td class="p-2 border bg-gray-50 font-medium">${row.Row || rIdx + 1}</td>`;
+                keys.filter(k => k !== 'Row').forEach(k => {
+                    bodyHtml += `<td class="p-2 border"><input type="text" value="${row[k] !== null ? row[k] : ''}" onchange="cellChanged(${rIdx}, '${k}', this.value)" class="w-full bg-transparent focus:bg-white focus:outline-none px-1 rounded"></td>`;
+                });
+                bodyHtml += `</tr>`;
+            });
+            document.getElementById('tableBody').innerHTML = bodyHtml;
+        }
+
+        function cellChanged(rIdx, key, val) {
+            rawData[rIdx][key] = isNaN(val) ? val : Number(val);
+            updateUI();
+        }
+
+        function populateDropdowns() {
+            if (rawData.length === 0) return;
+            const keys = Object.keys(rawData[0]).filter(k => k !== 'Row');
+            
+            // Group By
+            const groupSelect = document.getElementById('groupColSelect');
+            groupSelect.innerHTML = `<option value="none">ไม่แยกกลุ่ม</option>` + keys.map(k => `<option value="${k}">${k}</option>`).join('');
+            if (keys.includes('Cavity')) groupSelect.value = 'Cavity';
+
+            updateFiltersAndPoints();
+        }
+
+        function updateFiltersAndPoints() {
+            const keys = Object.keys(rawData[0]).filter(k => k !== 'Row');
+            const groupCol = document.getElementById('groupColSelect').value;
+            
+            // Points Dropdown
+            const pointSelect = document.getElementById('pointSelect');
+            const numCols = keys.filter(k => k !== groupCol);
+            pointSelect.innerHTML = numCols.map(k => `<option value="${k}">${k}</option>`).join('');
+
+            // Cavity Filter
+            const cavitySelect = document.getElementById('cavitySelect');
+            if (groupCol !== 'none') {
+                const uniqueVals = [...new Set(rawData.map(r => r[groupCol]))];
+                cavitySelect.innerHTML = `<option value="all">ทั้งหมด (Combined)</option>` + uniqueVals.map(v => `<option value="${v}">${v}</option>`).join('');
+                cavitySelect.disabled = false;
+            } else {
+                cavitySelect.innerHTML = `<option value="all">ทั้งหมด (Combined)</option>`;
+                cavitySelect.disabled = true;
+            }
+
+            autoFillSpec();
+        }
+
+        function autoFillSpec() {
+            const col = document.getElementById('pointSelect').value;
+            const match = col.match(/(\d+\.\d+)\s*[±\+\-]\s*(\d+\.\d+)/);
+            if (match) {
+                const target = parseFloat(match[1]);
+                const tol = parseFloat(match[2]);
+                document.getElementById('inputLsl').value = (target - tol).toFixed(4);
+                document.getElementById('inputTarget').value = target.toFixed(4);
+                document.getElementById('inputUsl').value = (target + tol).toFixed(4);
+            } else {
+                document.getElementById('inputLsl').value = 0.3265;
+                document.getElementById('inputTarget').value = 0.3280;
+                document.getElementById('inputUsl').value = 0.3295;
+            }
+        }
+
+        function updateUI() {
+            const pointCol = document.getElementById('pointSelect').value;
+            const groupCol = document.getElementById('groupColSelect').value;
+            const cavityVal = document.getElementById('cavitySelect').value;
+            const lsl = parseFloat(document.getElementById('inputLsl').value);
+            const target = parseFloat(document.getElementById('inputTarget').value);
+            const usl = parseFloat(document.getElementById('inputUsl').value);
+
+            if (!pointCol) return;
+
+            // กรองข้อมูลตามเงื่อนไข
+            let filtered = rawData.map((r, idx) => ({ val: Number(r[pointCol]), grp: groupCol !== 'none' ? r[groupCol] : 'Data', rowId: r.Row || idx + 1 })).filter(r => !isNaN(r.val));
+            if (groupCol !== 'none' && cavityVal !== 'all') {
+                filtered = filtered.filter(r => String(r.grp) === String(cavityVal));
+            }
+
+            renderBoxplot(filtered, pointCol, groupCol, lsl, target, usl);
+            renderCapability(filtered, pointCol, lsl, target, usl);
+            renderProbPlot(filtered, pointCol);
+        }
+
+        // --- Plot Boxplot ---
+        function renderBoxplot(data, colName, groupCol, lsl, target, usl) {
+            let traces = [];
+            if (groupCol !== 'none') {
+                const groups = [...new Set(data.map(d => d.grp))];
+                groups.forEach(g => {
+                    let gData = data.filter(d => d.grp === g);
+                    traces.push({
+                        y: gData.map(d => d.val),
+                        customdata: gData.map(d => d.rowId),
+                        name: `${groupCol} ${g}`,
+                        type: 'box',
+                        boxpoints: 'outliers',
+                        marker: { color: 'red' },
+                        line: { color: '#333' },
+                        fillcolor: 'rgba(114, 160, 229, 0.85)',
+                        hovertemplate: '<b>Row #: %{customdata}</b><br>Value: %{y:.5f}<extra></extra>'
+                    });
+                });
+            } else {
+                traces.push({
+                    y: data.map(d => d.val),
+                    customdata: data.map(d => d.rowId),
+                    name: colName,
+                    type: 'box',
+                    boxpoints: 'outliers',
+                    marker: { color: 'red' },
+                    line: { color: '#333' },
+                    fillcolor: 'rgba(114, 160, 229, 0.85)',
+                    hovertemplate: '<b>Row #: %{customdata}</b><br>Value: %{y:.5f}<extra></extra>'
+                });
+            }
+
+            const layout = {
+                title: { text: `<b>Boxplot of ${colName}</b>`, x: 0.5 },
+                yaxis: { title: colName, gridcolor: '#eaeaea' },
+                plot_bgcolor: 'white', paper_bgcolor: '#e8e8e8',
+                shapes: [
+                    { type: 'line', y0: usl, y1: usl, x0: 0, x1: 1, xref: 'paper', line: { color: 'red', dash: 'dash', width: 1.5 } },
+                    { type: 'line', y0: target, y1: target, x0: 0, x1: 1, xref: 'paper', line: { color: 'limegreen', dash: 'dash', width: 1.5 } },
+                    { type: 'line', y0: lsl, y1: lsl, x0: 0, x1: 1, xref: 'paper', line: { color: 'red', dash: 'dash', width: 1.5 } }
+                ],
+                margin: { l: 70, r: 70, t: 55, b: 50 },
+                showlegend: false
+            };
+            Plotly.newPlot('boxplotDiv', traces, layout, {responsive: true});
+        }
+
+        // --- Plot Process Capability ---
+        function renderCapability(dataObj, colName, lsl, target, usl) {
+            const vals = dataObj.map(d => d.val);
+            const n = vals.length;
+            if (n === 0) return;
+
+            const mean = jStat.mean(vals);
+            const stdOverall = n > 1 ? jStat.stdev(vals, true) : 0.0001;
+            
+            // คำนวณ Moving Range สำหรับ Within StDev
+            let mrSum = 0;
+            for(let i=0; i<vals.length-1; i++) mrSum += Math.abs(vals[i+1] - vals[i]);
+            const stdWithin = vals.length > 1 ? (mrSum / (vals.length - 1)) / 1.128 : stdOverall;
+
+            const pp = (usl - lsl) / (6 * stdOverall);
+            const ppl = (mean - lsl) / (3 * stdOverall);
+            const ppu = (usl - mean) / (3 * stdOverall);
+            const ppk = Math.min(ppl, ppu);
+
+            const cp = (usl - lsl) / (6 * stdWithin);
+            const cpl = (mean - lsl) / (3 * stdWithin);
+            const cpu = (usl - mean) / (3 * stdWithin);
+            const cpk = Math.min(cpl, cpu);
+
+            const s_t = Math.sqrt(vals.reduce((acc, v) => acc + Math.pow(v - target, 2), 0) / n);
+            const cpm = Math.min(usl - target, target - lsl) / (3 * s_t);
+
+            // สร้างกราฟจำลอง Minitab Capability Report ด้วย Plotly Shapes & Annotations
+            let xGrid = [];
+            let yOverall = [];
+            let yWithin = [];
+            const minV = Math.min(lsl, Math.min(...vals));
+            const maxV = Math.max(usl, Math.max(...vals));
+            const span = maxV - minV;
+            
+            for(let x = minV - span*0.2; x <= maxV + span*0.2; x += span/100) {
+                xGrid.push(x);
+                yOverall.push(jStat.normal.pdf(x, mean, stdOverall));
+                yWithin.push(jStat.normal.pdf(x, mean, stdWithin));
+            }
+
+            const histTrace = {
+                x: vals,
+                type: 'histogram',
+                histnorm: 'probability density',
+                marker: { color: '#7DA6D9', line: { color: '#1F3E7A', width: 0.8 } },
+                showlegend: false
+            };
+
+            const overallTrace = {
+                x: xGrid, y: yOverall, type: 'scatter', mode: 'lines',
+                line: { color: '#8B1A1A', width: 1.8 }, showlegend: false
+            };
+
+            const withinTrace = {
+                x: xGrid, y: yWithin, type: 'scatter', mode: 'lines',
+                line: { color: '#555555', width: 1.8, dash: 'dash' }, showlegend: false
+            };
+
+            const layout = {
+                title: { text: `<b>Process Capability Report for ${colName}</b>`, x: 0.5, font: { size: 18 } },
+                xaxis: { domain: [0.32, 0.70], range: [minV - span*0.12, maxV + span*0.12], gridcolor: '#eaeaea' },
+                yaxis: { domain: [0.35, 0.85], range: [0, Math.max(...yOverall)*1.1], showticklabels: false, gridcolor: '#eaeaea' },
+                plot_bgcolor: 'white', paper_bgcolor: '#dddddd',
+                shapes: [
+                    { type: 'line', x0: lsl, x1: lsl, y0: 0.35, y1: 0.85, yref: 'paper', line: { color: '#8B1A1A', dash: 'dash' } },
+                    { type: 'line', x0: target, x1: target, y0: 0.35, y1: 0.85, yref: 'paper', line: { color: '#0B6623', dash: 'dash' } },
+                    { type: 'line', x0: usl, x1: usl, y0: 0.35, y1: 0.85, yref: 'paper', line: { color: '#8B1A1A', dash: 'dash' } }
+                ],
+                annotations: [
+                    { x: lsl, y: 0.87, yref: 'paper', text: 'LSL', showarrow: false, font: { color: '#8B1A1A', size: 14 } },
+                    { x: target, y: 0.87, yref: 'paper', text: 'Target', showarrow: false, font: { color: '#0B6623', size: 14 } },
+                    { x: usl, y: 0.87, yref: 'paper', text: 'USL', showarrow: false, font: { color: '#8B1A1A', size: 14 } },
+                    // Process Data Text (Left)
+                    { x: 0.02, y: 0.80, xref: 'paper', yref: 'paper', text: `<b>Process Data</b><br>LSL: ${lsl.toFixed(4)}<br>Target: ${target.toFixed(4)}<br>USL: ${usl.toFixed(4)}<br>Mean: ${mean.toFixed(5)}<br>N: ${n}<br>StDev(Ovr): ${stdOverall.toFixed(6)}<br>StDev(Wit): ${stdWithin.toFixed(6)}`, showarrow: false, align: 'left', font: { size: 12 } },
+                    // Capability Indices Text (Right)
+                    { x: 0.80, y: 0.70, xref: 'paper', yref: 'paper', text: `<b>Overall Capability</b><br>Pp: ${pp.toFixed(2)}<br>Ppk: ${ppk.toFixed(2)}<br>Cpm: ${cpm.toFixed(2)}<br><br><b>Potential Capability</b><br>Cp: ${cp.toFixed(2)}<br>Cpk: ${cpk.toFixed(2)}`, showarrow: false, align: 'left', font: { size: 12 } }
+                ],
+                margin: { l: 10, r: 10, t: 50, b: 10 }
+            };
+
+            Plotly.newPlot('capabilityDiv', [histTrace, overallTrace, withinTrace], layout, {responsive: true});
+        }
+
+        // --- Plot Probability Plot ---
+        function renderProbPlot(dataObj, colName) {
+            const vals = dataObj.map(d => d.val).sort((a,b) => a - b);
+            const n = vals.length;
+            if (n < 3) return;
+
+            const mean = jStat.mean(vals);
+            const sd = jStat.stdev(vals, true);
+
+            let xTrace = [];
+            let yTrace = [];
+            vals.forEach((v, i) => {
+                let p = (i + 1 - 0.3) / (n + 0.4) * 100;
+                xTrace.push(v);
+                yTrace.push(jStat.normal.inv(p/100, 0, 1));
+            });
+
+            const trace = {
+                x: xTrace, y: yTrace, mode: 'markers', type: 'scatter',
+                marker: { size: 8, color: '#72A0E5', line: { color: '#333', width: 1 } },
+                customdata: dataObj.map(d => d.rowId),
+                hovertemplate: 'Row: %{customdata}<br>Value: %{x:.5f}<extra></extra>'
+            };
+
+            const fitLine = {
+                x: [vals[0], vals[n-1]],
+                y: [jStat.normal.inv(((1-0.3)/(n+0.4)), 0, 1), jStat.normal.inv(((n-0.3)/(n+0.4)), 0, 1)],
+                mode: 'lines', line: { color: 'darkred', width: 1.8 }
+            };
+
+            const layout = {
+                title: { text: `<b>Probability Plot of ${colName}</b>`, x: 0.5 },
+                xaxis: { title: 'Measurement', gridcolor: '#eaeaea' },
+                yaxis: { title: 'Percent' },
+                plot_bgcolor: 'white', paper_bgcolor: '#e8e8e8',
+                margin: { l: 60, r: 40, t: 65, b: 50 },
+                showlegend: false
+            };
+
+            Plotly.newPlot('probPlotDiv', [trace, fitLine], layout, {responsive: true});
+        }
+
+        function switchTab(tab) {
+            currentTab = tab;
+            document.getElementById('tabBox').classList.add('hidden');
+            document.getElementById('tabCap').classList.add('hidden');
+            document.getElementById('tabProb').classList.add('hidden');
+            
+            document.getElementById('btnTabBox').className = "py-2 px-4 font-semibold text-gray-500 hover:text-gray-700 transition border-b-2 border-transparent";
+            document.getElementById('btnTabCap').className = "py-2 px-4 font-semibold text-gray-500 hover:text-gray-700 transition border-b-2 border-transparent";
+            document.getElementById('btnTabProb').className = "py-2 px-4 font-semibold text-gray-500 hover:text-gray-700 transition border-b-2 border-transparent";
+
+            if(tab === 'box') {
+                document.getElementById('tabBox').classList.remove('hidden');
+                document.getElementById('btnTabBox').className = "py-2 px-4 font-semibold border-b-2 border-blue-600 text-blue-600 transition";
+            } else if(tab === 'cap') {
+                document.getElementById('tabCap').classList.remove('hidden');
+                document.getElementById('btnTabCap').className = "py-2 px-4 font-semibold border-b-2 border-blue-600 text-blue-600 transition";
+            } else if(tab === 'prob') {
+                document.getElementById('tabProb').classList.remove('hidden');
+                document.getElementById('btnTabProb').className = "py-2 px-4 font-semibold border-b-2 border-blue-600 text-blue-600 transition";
+            }
+            Plotly.Plots.resize(document.getElementById(tab === 'box' ? 'boxplotDiv' : (tab === 'cap' ? 'capabilityDiv' : 'probPlotDiv')));
+        }
+
+        function clearData() {
+            rawData = Array.from({length: 10}, (_, i) => ({ Row: i+1, "Point_1": null, Cavity: 1 }));
+            init();
+        }
+
+        // โหลดไฟล์ Excel ด้วย SheetJS
+        document.getElementById('uploadExcel').addEventListener('change', function(e) {
+            const file = e.target.files[0];
+            if (!file) return;
+            const reader = new FileReader();
+            reader.onload = function(e) {
+                const data = new Uint8Array(e.target.result);
+                const workbook = XLSX.read(data, {type: 'array'});
+                const firstSheet = workbook.SheetNames[0];
+                const json = XLSX.utils.sheet_to_json(workbook.Sheets[firstSheet]);
+                if(json.length > 0) {
+                    rawData = json.map((row, idx) => ({ Row: idx + 1, ...row }));
+                    init();
+                }
+            };
+            reader.readAsArrayBuffer(file);
+        });
+
+        function exportExcel() {
+            const ws = XLSX.utils.json_to_sheet(rawData);
+            const wb = XLSX.utils.book_new();
+            XLSX.utils.book_append_sheet(wb, ws, "Adjusted_Data");
+            XLSX.writeFile(wb, "adjusted_data.xlsx");
+        }
+
+        window.onload = init;
+    </script>
+</body>
+</html>
