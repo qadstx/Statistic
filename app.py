@@ -299,7 +299,8 @@ def create_capability(df_in, col_name, grp_col, cav_val, lsl, target, usl, subgr
     ticks = np.arange(t0, ax_hi + step * 1e-6, step)
 
     # Bin กว้าง = 1 ใน 4 ของระยะ tick โดยให้จุดกึ่งกลาง bin ตรงกับ tick
-    bin_w = step / 4
+    BIN_DIV = 8  # ยิ่งมากยิ่งถี่ (แท่งแคบลง)
+    bin_w = step / BIN_DIV
     b_start = t0 - bin_w / 2
     b_start += np.floor((d_min - b_start) / bin_w) * bin_w
     b_end = b_start + bin_w * (np.floor((d_max - b_start) / bin_w) + 1)
