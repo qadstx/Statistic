@@ -228,20 +228,27 @@ def create_capability(df_in, col_name, grp_col, cav_val, lsl, target, usl):
     mean = data.mean()
     std_overall = data.std(ddof=1) if n > 1 else 0.0001
     
-    # คำนวณ StDev(Within) ให้ตรงกับ Minitab เป๊ะ
-    if grp_col != "ไม่แยกกลุ่ม" and cav_val == "ทั้งหมด (Combined)" and grp_col in valid_df.columns:
-        # กรณีรวมกลุ่ม (Combined): ใช้ Pooled Variance ระหว่าง Cavity
-        subgroups = []
-        for _, grp_df in valid_df.groupby(grp_col):
-            if len(grp_df) > 1:
-                subgroups.append(grp_df[col_name].values)
+    # คำนวณ StDev(Within) ให้ตรงกับ Minitab เป๊ะ (ใช้ Pooled StDev หรือ R-bar/d2)
+    if grp_col != "ไม่แยกกลุ่ม" and grp_col in df_in.columns:
+        # ดึงข้อมูลทั้งหมดก่อนกรองมาจัดกลุ่ม Subgroup ตามลำดับแถว (Row-by-Row pairing)
+        full_valid = df_in[[col_name, grp_col]].dropna(subset=[col_name]).copy()
+        full_valid[col_name] = pd.to_numeric(full_valid[col_name], errors='coerce')
+        
+        # ถ้าเลือกดูแบบ Combined (ทุก Cavity) หรือแยก Cavity Minitab จะคำนวณจากความแปรปรวนภายในกลุ่มย่อย
+        subgroups = [group[col_name].values for _, group in full_valid.groupby(grp_col) if len(group) > 1]
         if len(subgroups) > 0:
-            variances = [np.var(sg, ddof=1) for sg in subgroups if len(sg) > 1]
-            std_within = np.sqrt(np.mean(variances)) if len(variances) > 0 else std_overall
+            # Pooled Variance formula ตาม Minitab
+            sum_sq = sum(np.sum((sg - sg.mean())**2) for sg in subgroups if len(sg) > 1)
+            sum_df = sum(len(sg) - 1 for sg in subgroups if len(sg) > 1)
+            std_within = np.sqrt(sum_sq / sum_df) if sum_df > 0 else std_overall
         else:
             std_within = std_overall
     else:
-        # กรณีดู Cavity เดี่ยวๆ (เช่น Cavity 1 หรือไม่แยกกลุ่ม): ใช้ Moving Range (MR / 1.128) ตามมาตรฐาน Minitab
+        mr = np.abs(np.diff(data))
+        std_within = mr.mean() / 1.128 if len(mr) > 0 and mr.mean() > 0 else std_overall
+
+    # ถ้ารันแบบเจาะจง Cavity เดี่ยว Minitab มักจะใช้ Moving Range ของ Cavity นั้นๆ คูณค่า d2
+    if cav_val != "ทั้งหมด (Combined)":
         mr = np.abs(np.diff(data))
         std_within = mr.mean() / 1.128 if len(mr) > 0 and mr.mean() > 0 else std_overall
 
@@ -309,7 +316,6 @@ def create_capability(df_in, col_name, grp_col, cav_val, lsl, target, usl):
         "Exp_Wit_Below": exp_below_wit, "Exp_Wit_Above": exp_above_wit, "Exp_Wit_Total": exp_total_wit
     }
     return fig, metrics
-
 # ==============================================================================
 # ฟังก์ชันสร้าง Probability Plot (รองรับการกรอง Cavity แยกเดี่ยวๆ เช่นกัน)
 # ==============================================================================
