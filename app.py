@@ -267,7 +267,7 @@ def create_capability(df_in, col_name, grp_col, cav_val, lsl, target, usl, subgr
     ppk = min(ppl, ppu)
 
     # Cpm ตามสูตร Minitab
-    s_t = np.sqrt(((data - target) ** 2).sum() / (n - 1)) if n > 1 else 0
+    s_t = np.sqrt(((data - target) ** 2).sum() / n) if n > 0 else 0
     cpm = min(usl - target, target - lsl) / (3 * s_t) if s_t > 0 else 0
 
     cp = (usl - lsl) / (6 * std_within) if std_within > 0 else 0
