@@ -329,6 +329,57 @@ def create_capability(df_in, col_name, grp_col, cav_val, lsl, target, usl, subgr
     }
     return fig, metrics
 
+
+# ==============================================================================
+# ตารางวินิจฉัย: เทียบทุกวิธีที่เป็นไปได้กับค่า StDev(Within) / Cpm ใน Minitab
+# ==============================================================================
+def diagnose_capability(data, lsl, target, usl, subgroup_size=1):
+    x = np.asarray(data, dtype=float)
+    n = len(x)
+    mean = x.mean()
+    s = x.std(ddof=1)
+    dx = np.diff(x)
+    mr = np.abs(dx)
+
+    cands = {
+        "Average MR: MRbar/1.128 (w=2)": mr.mean() / 1.128,
+        "Median MR: MR-median/0.954 (w=2)": np.median(mr) / 0.954,
+        "Sqrt of MSSD: sqrt(Σ(Δx)²/(2(n-1)))": np.sqrt((dx ** 2).sum() / (2 * (n - 1))),
+        "StDev Overall (s)": s,
+    }
+    if subgroup_size > 1:
+        groups = [x[i:i + subgroup_size] for i in range(0, n, subgroup_size)]
+        groups = [g for g in groups if len(g) > 1]
+        if groups:
+            ss = sum(((g - g.mean()) ** 2).sum() for g in groups)
+            d = sum(len(g) - 1 for g in groups)
+            sp = np.sqrt(ss / d)
+            cands[f"Pooled StDev (size={subgroup_size}) ไม่หาร c4"] = sp
+            cands[f"Pooled StDev (size={subgroup_size}) หาร c4(d+1)"] = sp / c4(d + 1)
+
+    rows = []
+    for name, sg in cands.items():
+        if not np.isfinite(sg) or sg <= 0:
+            continue
+        cpl = (mean - lsl) / (3 * sg)
+        cpu = (usl - mean) / (3 * sg)
+        rows.append({
+            "วิธีประมาณ σ": name, "StDev(Within)": f"{sg:.7f}",
+            "Cp": f"{(usl - lsl) / (6 * sg):.4f}", "CPL": f"{cpl:.4f}",
+            "CPU": f"{cpu:.4f}", "Cpk": f"{min(cpl, cpu):.4f}"
+        })
+
+    half = min(usl - target, target - lsl)
+    ss_t = ((x - target) ** 2).sum()
+    cpm_rows = []
+    for name, val in {
+        "min(USL-T, T-LSL) / (3·sqrt(Σ(x-T)²/(n-1)))": half / (3 * np.sqrt(ss_t / (n - 1))),
+        "(USL-LSL) / (6·sqrt(s² + (mean-T)²))": (usl - lsl) / (6 * np.sqrt(s ** 2 + (mean - target) ** 2)),
+        "(USL-LSL) / (6·sqrt(Σ(x-T)²/n))": (usl - lsl) / (6 * np.sqrt(ss_t / n)),
+    }.items():
+        cpm_rows.append({"สูตร Cpm": name, "Cpm": f"{val:.4f}"})
+    return pd.DataFrame(rows), pd.DataFrame(cpm_rows)
+
 # ==============================================================================
 # ฟังก์ชันสร้าง Probability Plot (รองรับการกรอง Cavity แยกเดี่ยวๆ เช่นกัน)
 # ==============================================================================
@@ -451,6 +502,13 @@ with tab2:
                         f"{m['Cpk']:.2f}"
                     ]
                 }).set_index("Index"), use_container_width=True)
+
+            with st.expander("🔬 วินิจฉัย: เทียบกับค่าใน Minitab (เปิดดูว่าวิธีไหนตรง)", expanded=False):
+                _d = get_filtered_data(edited_df, selected_col, group_col, cavity_filter)[selected_col]
+                _w_df, _cpm_df = diagnose_capability(_d.values, lsl_input, target_input, usl_input, subgroup_size)
+                st.caption(f"N = {len(_d)} | Mean = {_d.mean():.7f} | LSL/T/USL = {lsl_input} / {target_input} / {usl_input}")
+                st.dataframe(_w_df.set_index("วิธีประมาณ σ"), use_container_width=True)
+                st.dataframe(_cpm_df.set_index("สูตร Cpm"), use_container_width=True)
         else:
             st.warning("ข้อมูลไม่เพียงพอสำหรับการคำนวณในกลุ่มที่เลือก")
     else:
