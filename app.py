@@ -287,38 +287,59 @@ def create_capability(df_in, col_name, grp_col, cav_val, lsl, target, usl, subgr
     exp_above_wit = (1 - stats.norm.cdf(usl, mean, std_within)) * 1000000 if std_within > 0 else 0
     exp_total_wit = exp_below_wit + exp_above_wit
 
-    x_min = min(lsl, data.min()) if len(data) > 0 else lsl
-    x_max = max(usl, data.max()) if len(data) > 0 else usl
-    span = x_max - x_min if x_max > x_min else 0.003
-    x_grid = np.linspace(x_min - span * 0.15, x_max + span * 0.15, 300)
+    # --- แกน X / Bin / Tick ให้หน้าตาเหมือน Minitab ---
+    d_min, d_max = float(data.min()), float(data.max())
+    ax_lo, ax_hi = min(lsl, d_min), max(usl, d_max)
+    span = ax_hi - ax_lo if ax_hi > ax_lo else 0.003
+    raw = span / 8
+    mag = 10 ** np.floor(np.log10(raw))
+    step = next((k * mag for k in (1, 2, 4, 5, 10) if k * mag >= raw * 0.999), 10 * mag)
+    dec = max(0, int(np.ceil(-np.log10(step) - 1e-9)))
+    t0 = np.ceil(ax_lo / step - 1e-9) * step
+    ticks = np.arange(t0, ax_hi + step * 1e-6, step)
+
+    # Bin กว้าง = ครึ่งหนึ่งของระยะ tick โดยให้จุดกึ่งกลาง bin ตรงกับ tick
+    bin_w = step / 2
+    b_start = t0 - bin_w / 2
+    b_start += np.floor((d_min - b_start) / bin_w) * bin_w
+    b_end = b_start + bin_w * (np.floor((d_max - b_start) / bin_w) + 1)
+
+    x_grid = np.linspace(ax_lo, ax_hi, 400)
 
     fig = go.Figure()
     fig.add_trace(go.Histogram(
-        x=data, histnorm='probability density', name='Data',
-        marker_color=hex_to_rgba(box_fill_hex, 0.75),
-        marker_line=dict(color=box_line_hex, width=1)
+        x=data, histnorm='probability density', name='Data', showlegend=False,
+        xbins=dict(start=b_start, end=b_end, size=bin_w),
+        marker_color="#6C9BD2",
+        marker_line=dict(color="#1F3E7A", width=0.8)
     ))
     if std_overall > 0:
         fig.add_trace(go.Scatter(x=x_grid, y=stats.norm.pdf(x_grid, mean, std_overall),
-                                 mode='lines', name='Overall', line=dict(color='darkred', width=2)))
+                                 mode='lines', name='Overall', line=dict(color='#8B1A1A', width=1.6)))
     if std_within > 0:
         fig.add_trace(go.Scatter(x=x_grid, y=stats.norm.pdf(x_grid, mean, std_within),
-                                 mode='lines', name='Within', line=dict(color='royalblue', width=2, dash='dash')))
+                                 mode='lines', name='Within', line=dict(color='#555555', width=1.6, dash='dash')))
 
-    fig.add_vline(x=lsl, line_dash="dash", line_color="red", annotation_text="LSL", annotation_position="top")
-    fig.add_vline(x=target, line_dash="dash", line_color="green", annotation_text="Target", annotation_position="top")
-    fig.add_vline(x=usl, line_dash="dash", line_color="red", annotation_text="USL", annotation_position="top")
+    for xv, colr, lbl in [(lsl, "red", "LSL"), (target, "#333333", "Target"), (usl, "red", "USL")]:
+        fig.add_vline(x=xv, line_dash="dot", line_color=colr, line_width=1.3)
+        fig.add_annotation(x=xv, y=1, yref="paper", text=f"<b>{lbl}</b>", showarrow=False,
+                           yanchor="bottom", font=dict(color=colr, size=12))
 
     title_suffix = f" (Cavity: {cav_val})" if cav_val != "ทั้งหมด (Combined)" else ""
     fig.update_layout(
         title=dict(text=f"<b>Process Capability Report for {col_name}{title_suffix}</b>", x=0.5, xanchor='center'),
-        xaxis=dict(range=[x_min - span * 0.18, x_max + span * 0.18], tickformat=".4f", gridcolor="#EAEAEA"),
-        yaxis=dict(gridcolor="#EAEAEA", showticklabels=False),
+        xaxis=dict(range=[ax_lo, ax_hi], tickmode='array', tickvals=ticks,
+                   ticktext=[f"{t:.{dec}f}" for t in ticks], tickangle=-60, showgrid=False),
+        yaxis=dict(showgrid=False, showticklabels=False, zeroline=False),
+        bargap=0,
+        legend=dict(x=1.01, y=1, xanchor='left', yanchor='top'),
         plot_bgcolor="white",
         paper_bgcolor="#E8E8E8",
         height=chart_height,
-        margin=dict(l=40, r=40, t=55, b=50)
+        margin=dict(l=40, r=90, t=75, b=70)
     )
+    fig.update_xaxes(showline=True, linewidth=1, linecolor='#999999', mirror=True)
+    fig.update_yaxes(showline=True, linewidth=1, linecolor='#999999', mirror=True)
 
     metrics = {
         "N": n, "Mean": mean, "StDev(Overall)": std_overall, "StDev(Within)": std_within,
