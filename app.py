@@ -212,7 +212,6 @@ def create_capability(df_in, col_name, grp_col, lsl, target, usl):
     mean = data.mean()
     std_overall = data.std(ddof=1)
     
-    # คำนวณ StDev(Within) ตามหลัก Minitab (Pooled Standard Deviation)
     if grp_col != "ไม่แยกกลุ่ม" and grp_col in valid_df.columns:
         subgroups = []
         for _, grp_df in valid_df.groupby(grp_col):
@@ -442,4 +441,7 @@ with tab3:
     else:
         st.subheader(f"🎯 แสดง Probability Plot ทั้งหมด ({len(cols_to_plot)} พอยต์)")
         grid_cols = st.columns(2)
-        for idx, col_name in enumerate(
+        for idx, col_name in enumerate(cols_to_plot):
+            fig_p, ad_stat, ad_pval, mean, std, n = create_prob_plot(edited_df, col_name, group_col)
+            with grid_cols[idx % 2]:
+                st.plotly_chart(fig_p, use_container_width=True)
