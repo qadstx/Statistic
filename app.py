@@ -8,7 +8,7 @@ import re
 from io import BytesIO
 import zipfile
 
-# เปลี่ยนหัวแอปให้คลีนตามต้องการ
+# --- ปรับหัวแอปให้คลีนแบบ Minimal ---
 st.set_page_config(page_title="Minitab DIY", layout="wide")
 st.title("Minitab DIY")
 
@@ -18,7 +18,7 @@ def hex_to_rgba(hex_color, opacity=0.85):
     r, g, b = tuple(int(hex_color[i:i+2], 16) for i in (0, 2, 4))
     return f"rgba({r}, {g}, {b}, {opacity})"
 
-# --- ฟังก์ชันดึงค่า Target / Tol จากชื่อคอลัมน์ ---
+# --- ฟังก์ชันดึงค่า Target / Tol จากชื่อคอลัมน์ เช่น B1_0.328 ± 0.0015 ---
 def parse_spec_from_col(col_name):
     match = re.search(r"(\d+\.\d+)\s*[±\+\-]\s*(\d+\.\d+)", str(col_name))
     if match:
@@ -36,6 +36,10 @@ def c4(n):
     return np.sqrt(2.0 / (n - 1)) * np.exp(gammaln(n / 2.0) - gammaln((n - 1) / 2.0))
 
 def calc_within(values, subgroup_size=1):
+    """StDev(Within) แบบ Minitab
+    - subgroup_size = 1 : Moving Range (MRbar / 1.128)
+    - subgroup_size > 1 : Pooled StDev หารด้วย c4(d+1) (unbiasing constant)
+    """
     x = np.asarray(values, dtype=float)
     if subgroup_size <= 1:
         mr = np.abs(np.diff(x))
@@ -48,10 +52,8 @@ def calc_within(values, subgroup_size=1):
     d = sum(len(g) - 1 for g in groups)
     return np.sqrt(ss / d) / c4(d + 1)
 
-# ==============================================================================
-# UI แถบด้านซ้าย (Sidebar) - ปรับให้คลีน มินิมอล
-# ==============================================================================
-st.sidebar.header("📁 ข้อมูล (Data)")
+# --- 1. ส่วนจัดการข้อมูล (Upload หรือ ตารางเปล่าให้กรอก) ---
+st.sidebar.header("📁 ข้อมูล (Data Input)")
 uploaded_file = st.sidebar.file_uploader("อัปโหลดไฟล์ Excel/CSV", type=["xlsx", "csv"], label_visibility="collapsed")
 
 if "df" not in st.session_state:
@@ -70,19 +72,20 @@ if "df" not in st.session_state:
 if "editor_ver" not in st.session_state:
     st.session_state.editor_ver = 0
 
-col_btn1, col_btn2 = st.sidebar.columns(2)
-with col_btn1:
-    if st.button("📥 โหลดไฟล์", use_container_width=True) and uploaded_file is not None:
-        if uploaded_file.name.endswith(".csv"):
-            temp_df = pd.read_csv(uploaded_file)
-        else:
-            temp_df = pd.read_excel(uploaded_file)
-        temp_df.index = np.arange(1, len(temp_df) + 1)
-        temp_df.index.name = "Row"
-        st.session_state.df = temp_df
-        st.session_state.editor_ver += 1
-with col_btn2:
-    if st.button("🧹 ล้างค่า", use_container_width=True):
+btn_col1, btn_col2 = st.sidebar.columns(2)
+with btn_col1:
+    if st.button("📥 โหลดข้อมูล", use_container_width=True):
+        if uploaded_file is not None:
+            if uploaded_file.name.endswith(".csv"):
+                temp_df = pd.read_csv(uploaded_file)
+            else:
+                temp_df = pd.read_excel(uploaded_file)
+            temp_df.index = np.arange(1, len(temp_df) + 1)
+            temp_df.index.name = "Row"
+            st.session_state.df = temp_df
+            st.session_state.editor_ver += 1
+with btn_col2:
+    if st.button("🧹 ล้างตาราง", use_container_width=True):
         empty_df = pd.DataFrame({"B1_0.328 ± 0.0015": [np.nan]*10, "Cavity": [1]*10})
         empty_df.index = np.arange(1, len(empty_df) + 1)
         empty_df.index.name = "Row"
@@ -92,8 +95,8 @@ with col_btn2:
 st.session_state.df.index = np.arange(1, len(st.session_state.df) + 1)
 st.session_state.df.index.name = "Row"
 
-with st.expander("📝 ตารางข้อมูล (Data)", expanded=True):
-    _cfg = {"_index": st.column_config.NumberColumn("Row", format="%d")}
+with st.expander("📝 ตารางข้อมูล (คลิกแก้ตัวเลข / ก๊อปวางจาก Excel ได้ทันที)", expanded=True):
+    _cfg = {"_index": st.column_config.NumberColumn("Row #", help="ลำดับแถวข้อมูล", format="%d")}
     for _c in st.session_state.df.columns:
         if str(_c).lower() != "cavity" and pd.api.types.is_numeric_dtype(st.session_state.df[_c]):
             _cfg[_c] = st.column_config.NumberColumn(format="%.5f", step=0.00001)
@@ -114,49 +117,68 @@ def to_excel(df):
         df.to_excel(writer, index=True, sheet_name='Adjusted_Data')
     return output.getvalue()
 
-st.sidebar.download_button(label="💾 เซฟข้อมูลเป็น Excel", data=to_excel(edited_df), file_name="data.xlsx", use_container_width=True)
+st.sidebar.download_button(
+    label="💾 เซฟข้อมูลที่แก้แล้ว (.xlsx)",
+    data=to_excel(edited_df),
+    file_name="adjusted_data.xlsx",
+    mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+    use_container_width=True
+)
+
 st.sidebar.divider()
 
 # --- 2. ตั้งค่า (Settings) ---
 st.sidebar.header("⚙️ ตั้งค่า (Settings)")
-view_mode = st.sidebar.radio("รูปแบบการดู:", ["🔍 ดูทีละกราฟ", "📜 ดูทั้งหมด"], horizontal=True, label_visibility="collapsed")
-
-# ซ่อนส่วนตกแต่งกราฟไว้ใน Expander เพื่อความมินิมอล
-with st.sidebar.expander("🎨 ตกแต่งกราฟ (เปลี่ยนสี/ขนาด)"):
-    col_c1, col_c2 = st.columns(2)
-    with col_c1: box_fill_hex = st.color_picker("สีพื้น Boxplot", "#72A0E5")
-    with col_c2: box_line_hex = st.color_picker("สีเส้นขอบ", "#333333")
-    box_width_val = st.slider("ความกว้างกล่อง", 0.15, 0.70, 0.35, 0.05)
-    box_gap_val = st.slider("ระยะห่างกล่อง", 0.3, 2.5, 1.0, 0.1)
-    chart_height = st.slider("ความสูงกราฟ (px)", 380, 700, 480, 20)
+view_mode = st.sidebar.radio(
+    "รูปแบบการแสดงผล:",
+    ["🔍 Show ทีละกราฟ", "📜 Show ทั้งหมดทีเดียว"],
+    horizontal=True,
+    label_visibility="collapsed"
+)
 
 all_cols = edited_df.columns.tolist()
 num_cols = [c for c in all_cols if str(c).lower() != "cavity"]
 
-group_col = st.sidebar.selectbox("แบ่งกลุ่มตาม (Group by):", ["ไม่แยกกลุ่ม"] + all_cols, 
-                                 index=all_cols.index("Cavity") + 1 if "Cavity" in all_cols else 0)
+group_col = st.sidebar.selectbox(
+    "แบ่งกลุ่มตาม (Group by):",
+    ["ไม่แยกกลุ่ม"] + all_cols,
+    index=all_cols.index("Cavity") + 1 if "Cavity" in all_cols else 0
+)
 
 cavity_filter = "ทั้งหมด (Combined)"
 if group_col != "ไม่แยกกลุ่ม" and group_col in edited_df.columns:
     unique_cavities = ["ทั้งหมด (Combined)"] + list(edited_df[group_col].dropna().unique())
-    cavity_filter = st.sidebar.selectbox("เลือกกลุ่ม (Filter):", unique_cavities)
+    cavity_filter = st.sidebar.selectbox("เลือกดูเฉพาะกลุ่ม:", unique_cavities)
 
-subgroup_size = st.sidebar.number_input("Subgroup size", min_value=1, value=32, step=1, 
-                                        help="1 = Moving Range, >1 = Pooled StDev")
+subgroup_size = st.sidebar.number_input(
+    "Subgroup size", min_value=1, value=32, step=1,
+    help="1 = ใช้ Moving Range, > 1 = ใช้ Pooled StDev (แบบ Minitab)"
+)
 
-if "ดูทีละกราฟ" in view_mode:
-    selected_col = st.sidebar.selectbox("พอยต์ที่ต้องการวิเคราะห์:", num_cols)
+if "Show ทีละกราฟ" in view_mode:
+    selected_col = st.sidebar.selectbox("เลือกพอยต์ที่ต้องการวิเคราะห์:", num_cols)
     auto_lsl, auto_target, auto_usl = parse_spec_from_col(selected_col)
-    
-    # วาง LSL, Target, USL ให้อยู่บรรทัดเดียวกันเพื่อประหยัดพื้นที่
-    c_lsl, c_tgt, c_usl = st.sidebar.columns(3)
-    lsl_input = c_lsl.number_input("LSL", value=auto_lsl, format="%.4f", step=0.0001)
-    target_input = c_tgt.number_input("Target", value=auto_target, format="%.4f", step=0.0001)
-    usl_input = c_usl.number_input("USL", value=auto_usl, format="%.4f", step=0.0001)
+    c1_sp, c2_sp, c3_sp = st.sidebar.columns(3)
+    lsl_input = c1_sp.number_input("LSL", value=auto_lsl, format="%.5f", step=0.0001)
+    target_input = c2_sp.number_input("Target", value=auto_target, format="%.5f", step=0.0001)
+    usl_input = c3_sp.number_input("USL", value=auto_usl, format="%.5f", step=0.0001)
     cols_to_plot = [selected_col]
 else:
     cols_to_plot = st.sidebar.multiselect("เลือกพอยต์ที่จะแสดงทั้งหมด:", num_cols, default=num_cols)
+    st.sidebar.caption("💡 ดึงค่า Spec จากชื่อหัวคอลัมน์ให้อัตโนมัติ")
 
+# --- 3. ตกแต่งกราฟ (ซ่อนใน Expander แบบคลีนๆ) ---
+with st.sidebar.expander("🎨 ตกแต่งกราฟ (เปลี่ยนสี/ขนาด)"):
+    col_c1, col_c2 = st.columns(2)
+    with col_c1:
+        box_fill_hex = st.color_picker("สีพื้น Boxplot", "#72A0E5")
+    with col_c2:
+        box_line_hex = st.color_picker("สีเส้นขอบ", "#333333")
+    box_width_val = st.slider("ความอ้วนของกล่อง", 0.15, 0.70, 0.35, 0.05)
+    box_gap_val = st.slider("ระยะห่างระหว่างกล่อง", 0.3, 2.5, 1.0, 0.1)
+    chart_height = st.slider("ความสูงของกราฟ (px)", 380, 700, 480, 20)
+
+# ฟังก์ชันกรองข้อมูล
 def get_filtered_data(df_in, col_name, grp_col, cav_val):
     temp_df = df_in[[col_name] + ([grp_col] if grp_col != "ไม่แยกกลุ่ม" else [])].copy()
     temp_df["Row_ID"] = temp_df.index
@@ -168,7 +190,7 @@ def get_filtered_data(df_in, col_name, grp_col, cav_val):
     return temp_df
 
 # ==============================================================================
-# ฟังก์ชันสร้างกราฟ Boxplot (โครงสร้างกราฟเดิม 100%)
+# ฟังก์ชันสร้างกราฟ Boxplot
 # ==============================================================================
 def create_boxplot(df_in, col_name, grp_col, lsl, target, usl):
     valid_df = df_in[[col_name] + ([grp_col] if grp_col != "ไม่แยกกลุ่ม" else [])].dropna(subset=[col_name]).copy()
@@ -252,7 +274,7 @@ def create_boxplot(df_in, col_name, grp_col, lsl, target, usl):
     return fig
 
 # ==============================================================================
-# ฟังก์ชันสร้าง Capability (โครงสร้างกราฟเดิม 100%)
+# ฟังก์ชันสร้าง Capability 
 # ==============================================================================
 def create_capability(df_in, col_name, grp_col, cav_val, lsl, target, usl, subgroup_size=1):
     valid_df = get_filtered_data(df_in, col_name, grp_col, cav_val)
@@ -338,8 +360,7 @@ def create_capability(df_in, col_name, grp_col, cav_val, lsl, target, usl, subgr
         fig.add_annotation(x=x, y=y, xref="paper", yref="paper", text=txt, showarrow=False,
                            xanchor=anchor, yanchor="middle", font=dict(size=size, color="#222222", family=FONT))
 
-    title_suffix = f" (Cavity: {cav_val})" if cav_val != "ทั้งหมด (Combined)" else ""
-    _t(0.5, 0.955, f"Process Capability Report for {col_name}{title_suffix}", "center", 24)
+    _t(0.5, 0.955, f"Process Capability Report for {col_name}", "center", 24)
 
     _t(0.155, 0.838, "Process Data", "center")
     for yy, (lb, vv) in zip(
@@ -384,7 +405,7 @@ def create_capability(df_in, col_name, grp_col, cav_val, lsl, target, usl, subgr
     _t(0.02, 0.025, "The actual process spread is represented by 6 sigma.", "left", 17, italic=True)
 
     fig.update_layout(
-        xaxis=dict(domain=[0.306, 0.721], range=[ax_lo, ax_hi], tickmode='array', tickvals=ticks,
+        xaxis=dict(domain=[0.306, 0.721], range=[ax_lo - span*0.12, ax_hi + span*0.12], tickmode='array', tickvals=ticks,
                    ticktext=[f"{t:.{dec}f}" for t in ticks], tickangle=-45, tickfont=dict(size=14, family=FONT),
                    showgrid=True, gridcolor="#E6E6E6", showline=True, linecolor="#888888", mirror=True),
         yaxis=dict(domain=[0.359, PLOT_TOP], showticklabels=False, showgrid=True, gridcolor="#E6E6E6",
@@ -452,7 +473,7 @@ def diagnose_capability(data, lsl, target, usl, subgroup_size=1):
     return pd.DataFrame(rows), pd.DataFrame(cpm_rows)
 
 # ==============================================================================
-# ฟังก์ชันสร้าง Probability Plot (โครงสร้างกราฟเดิม 100%)
+# ฟังก์ชันสร้าง Probability Plot
 # ==============================================================================
 def create_prob_plot(df_in, col_name, grp_col, cav_val):
     valid_df = get_filtered_data(df_in, col_name, grp_col, cav_val)
@@ -485,7 +506,6 @@ def create_prob_plot(df_in, col_name, grp_col, cav_val):
     tick_probs = [0.1, 1, 5, 10, 20, 30, 40, 50, 60, 70, 80, 90, 95, 99, 99.9]
     tick_z = stats.norm.ppf(np.array(tick_probs) / 100.0)
 
-    title_suffix = f" (Cavity: {cav_val})" if cav_val != "ทั้งหมด (Combined)" else ""
     fig = go.Figure()
     fig.add_trace(go.Scatter(
         x=sorted_df[col_name], y=z_scores, mode='markers', name='Data',
@@ -496,7 +516,7 @@ def create_prob_plot(df_in, col_name, grp_col, cav_val):
     fig.add_trace(go.Scatter(x=line_x, y=z_scores, mode='lines', name='Fit Line', line=dict(color='darkred', width=1.8)))
 
     fig.update_layout(
-        title=dict(text=f"<b>Probability Plot of {col_name}{title_suffix}</b><br><sup>AD = {ad_stat:.3f}, P-Value = {ad_pval:.4f}</sup>", x=0.5, xanchor='center'),
+        title=dict(text=f"<b>Probability Plot of {col_name}</b><br><sup>AD = {ad_stat:.3f}, P-Value = {ad_pval:.4f}</sup>", x=0.5, xanchor='center'),
         xaxis=dict(title="Measurement", tickformat=".4f", gridcolor="#EAEAEA"),
         yaxis=dict(title="Percent", tickmode='array', tickvals=tick_z, ticktext=[str(p) for p in tick_probs], gridcolor="#EAEAEA"),
         plot_bgcolor="white",
@@ -508,17 +528,17 @@ def create_prob_plot(df_in, col_name, grp_col, cav_val):
     return fig, ad_stat, ad_pval, mean, std_overall, n
 
 # ==============================================================================
-# ส่วนแสดงผลหน้าเว็บ (Tabs)
+# ส่วนแสดงผลหน้าเว็บ
 # ==============================================================================
 tab1, tab2, tab3 = st.tabs([
-    "📦 Boxplot",
-    "📈 Process Capability",
-    "🎯 Probability Plot"
+    "📦 1. Boxplot",
+    "📈 2. Process Capability",
+    "🎯 3. Probability Plot"
 ])
 
 # ----------------- TAB 1: BOXPLOT -----------------
 with tab1:
-    if "ดูทีละกราฟ" in view_mode:
+    if "Show ทีละกราฟ" in view_mode:
         c_left, c_center, c_right = st.columns([1, 2.2, 1])
         with c_center:
             fig_b = create_boxplot(edited_df, selected_col, group_col, lsl_input, target_input, usl_input)
@@ -533,13 +553,13 @@ with tab1:
 
 # ----------------- TAB 2: PROCESS CAPABILITY -----------------
 with tab2:
-    if "ดูทีละกราฟ" in view_mode:
+    if "Show ทีละกราฟ" in view_mode:
         fig_c, m = create_capability(edited_df, selected_col, group_col, cavity_filter,
                                      lsl_input, target_input, usl_input, subgroup_size)
         if m:
             st.plotly_chart(fig_c, use_container_width=True)
 
-            with st.expander("🔬 วินิจฉัย: เทียบกับค่าใน Minitab (เปิดดูวิธีที่ตรงกัน)", expanded=False):
+            with st.expander("🔬 วินิจฉัย: เทียบกับค่าใน Minitab", expanded=False):
                 _d = get_filtered_data(edited_df, selected_col, group_col, cavity_filter)[selected_col]
                 _w_df, _cpm_df = diagnose_capability(_d.values, lsl_input, target_input, usl_input, subgroup_size)
                 st.caption(f"N = {len(_d)} | Mean = {_d.mean():.7f} | LSL/T/USL = {lsl_input} / {target_input} / {usl_input}")
@@ -560,7 +580,7 @@ with tab2:
 
 # ----------------- TAB 3: PROBABILITY PLOT -----------------
 with tab3:
-    if "ดูทีละกราฟ" in view_mode:
+    if "Show ทีละกราฟ" in view_mode:
         fig_p, ad_stat, ad_pval, mean, std, n = create_prob_plot(edited_df, selected_col, group_col, cavity_filter)
         if n >= 3:
             c1, c2 = st.columns([2.5, 1])
@@ -625,7 +645,7 @@ with tab3:
                     st.plotly_chart(fig_p, use_container_width=True)
 
 # ==============================================================================
-# Export กราฟ (หน้าตาเดิม 100%)
+# Export กราฟเป็นรูปภาพ (จัดเรียงอยู่ Sidebar ด้านล่างสุด)
 # ==============================================================================
 EXPORT_TYPES = ["Boxplot", "Process Capability", "Probability Plot"]
 EXPORT_FILE = {"Boxplot": "boxplot", "Process Capability": "process_capability", "Probability Plot": "probability_plot"}
@@ -634,7 +654,7 @@ def build_export_zips(points, types, img_w, img_h):
     cav_tag = "" if cavity_filter == "ทั้งหมด (Combined)" else f"_Cavity{cavity_filter}"
     files = {t: [] for t in types}
     for i, col_name in enumerate(points, 1):
-        if "ดูทีละกราฟ" in view_mode and col_name == selected_col:
+        if "Show ทีละกราฟ" in view_mode and col_name == selected_col:
             c_lsl, c_target, c_usl = lsl_input, target_input, usl_input
         else:
             c_lsl, c_target, c_usl = parse_spec_from_col(col_name)
@@ -674,7 +694,7 @@ def build_export_zips(points, types, img_w, img_h):
     return zips
 
 with st.sidebar:
-    st.header("🖼️ ดาวน์โหลดกราฟ (Export)")
+    st.header("🖼️ ดาวน์โหลดรูปภาพ")
     export_cols = st.multiselect("พอยต์ที่จะ export:", num_cols, default=num_cols)
     export_types = st.multiselect("ชนิดกราฟ:", EXPORT_TYPES, default=EXPORT_TYPES)
     ec1, ec2 = st.columns(2)
@@ -682,8 +702,8 @@ with st.sidebar:
         export_w = st.number_input("กว้าง (px)", min_value=300, max_value=1600, value=600, step=50)
     with ec2:
         export_h = st.number_input("สูง (px)", min_value=300, max_value=1200, value=480, step=20)
-    st.caption("ขนาดนี้ใช้กับ Boxplot และ Probability Plot ส่วน Process Capability ใช้ขนาดรายงาน 1000×720 คงที่")
-    if st.button("🖼️ สร้างรูป", use_container_width=True):
+    st.caption("ขนาดใช้กับ Boxplot และ Prob Plot ส่วน Capability ใช้ 1000×720 คงที่")
+    if st.button("🖼️ สร้างไฟล์ ZIP", use_container_width=True):
         if not export_cols or not export_types:
             st.warning("เลือกพอยต์และชนิดกราฟอย่างน้อยอย่างละ 1")
         else:
@@ -699,4 +719,3 @@ with st.sidebar:
             _fname = "all_charts.zip" if _t_name == "ทั้งหมด" else f"{EXPORT_FILE[_t_name]}.zip"
             st.download_button(f"⬇️ {_t_name} (.zip)", data=_bytes, file_name=_fname,
                                mime="application/zip", use_container_width=True, key=f"dl_{_t_name}")
-        st.caption("ถ้าเปลี่ยน setting ให้กดสร้างรูปใหม่ทุกครั้ง")
