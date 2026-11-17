@@ -74,7 +74,6 @@ with st.expander("📝 ตารางข้อมูล (มีเลขแถ�
     edited_df.index = np.arange(1, len(edited_df) + 1)
     edited_df.index.name = "Row"
 
-# ปุ่ม Save ข้อมูลที่ปรับแก้แล้วเป็น Excel
 def to_excel(df):
     output = BytesIO()
     with pd.ExcelWriter(output, engine='xlsxwriter') as writer:
@@ -116,6 +115,12 @@ group_col = st.sidebar.selectbox(
     index=all_cols.index("Cavity") + 1 if "Cavity" in all_cols else 0
 )
 
+# ตัวเลือกกรองเฉพาะ Cavity สำหรับหน้า Capability & Probability Plot
+cavity_filter = "ทั้งหมด (Combined)"
+if group_col != "ไม่แยกกลุ่ม" and group_col in edited_df.columns:
+    unique_cavities = ["ทั้งหมด (Combined)"] + list(edited_df[group_col].dropna().unique())
+    cavity_filter = st.sidebar.selectbox("🎯 เลือก Cavity ที่ต้องการวิเคราะห์เดี่ยวๆ:", unique_cavities)
+
 if "Show ทีละกราฟ" in view_mode:
     selected_col = st.sidebar.selectbox("เลือกพอยต์ที่ต้องการวิเคราะห์:", num_cols)
     auto_lsl, auto_target, auto_usl = parse_spec_from_col(selected_col)
@@ -126,6 +131,17 @@ if "Show ทีละกราฟ" in view_mode:
 else:
     cols_to_plot = st.sidebar.multiselect("เลือกพอยต์ที่จะแสดงทั้งหมด:", num_cols, default=num_cols)
     st.sidebar.caption("💡 ในโหมดแสดงทั้งหมด ระบบจะดึงค่า USL / Target / LSL จากชื่อหัวคอลัมน์ให้อัตโนมัติ")
+
+# ฟังก์ชันกรองข้อมูลตาม Cavity ที่เลือก
+def get_filtered_data(df_in, col_name, grp_col, cav_val):
+    temp_df = df_in[[col_name] + ([grp_col] if grp_col != "ไม่แยกกลุ่ม" else [])].copy()
+    temp_df["Row_ID"] = temp_df.index
+    temp_df[col_name] = pd.to_numeric(temp_df[col_name], errors='coerce')
+    temp_df = temp_df.dropna(subset=[col_name])
+    
+    if grp_col != "ไม่แยกกลุ่ม" and cav_val != "ทั้งหมด (Combined)":
+        temp_df = temp_df[temp_df[grp_col].astype(str) == str(cav_val)]
+    return temp_df
 
 # ==============================================================================
 # ฟังก์ชันสร้างกราฟ Boxplot
@@ -200,19 +216,19 @@ def create_boxplot(df_in, col_name, grp_col, lsl, target, usl):
     return fig
 
 # ==============================================================================
-# ฟังก์ชันสร้าง Capability ตรงตาม Minitab (StDev Within แยก Subgroup Cavity)
+# ฟังก์ชันสร้าง Capability (รองรับการกรอง Cavity แยกเดี่ยวๆ แล้ว N จะเป็น 32)
 # ==============================================================================
-def create_capability(df_in, col_name, grp_col, lsl, target, usl):
-    valid_df = df_in[[col_name] + ([grp_col] if grp_col != "ไม่แยกกลุ่ม" else [])].dropna(subset=[col_name]).copy()
-    valid_df[col_name] = pd.to_numeric(valid_df[col_name], errors='coerce')
-    valid_df = valid_df.dropna(subset=[col_name])
-    
+def create_capability(df_in, col_name, grp_col, cav_val, lsl, target, usl):
+    valid_df = get_filtered_data(df_in, col_name, grp_col, cav_val)
     data = valid_df[col_name]
     n = len(data)
+    if n == 0:
+        return None, {}
+        
     mean = data.mean()
-    std_overall = data.std(ddof=1)
+    std_overall = data.std(ddof=1) if n > 1 else 0.0001
     
-    if grp_col != "ไม่แยกกลุ่ม" and grp_col in valid_df.columns:
+    if grp_col != "ไม่แยกกลุ่ม" and cav_val == "ทั้งหมด (Combined)" and grp_col in valid_df.columns:
         subgroups = []
         for _, grp_df in valid_df.groupby(grp_col):
             if len(grp_df) > 1:
@@ -241,12 +257,12 @@ def create_capability(df_in, col_name, grp_col, lsl, target, usl):
     obs_above = (data > usl).sum() / n * 1000000 if n > 0 else 0
     obs_total = obs_below + obs_above
 
-    exp_below_ovr = stats.norm.cdf(lsl, mean, std_overall) * 1000000
-    exp_above_ovr = (1 - stats.norm.cdf(usl, mean, std_overall)) * 1000000
+    exp_below_ovr = stats.norm.cdf(lsl, mean, std_overall) * 1000000 if std_overall > 0 else 0
+    exp_above_ovr = (1 - stats.norm.cdf(usl, mean, std_overall)) * 1000000 if std_overall > 0 else 0
     exp_total_ovr = exp_below_ovr + exp_above_ovr
 
-    exp_below_wit = stats.norm.cdf(lsl, mean, std_within) * 1000000
-    exp_above_wit = (1 - stats.norm.cdf(usl, mean, std_within)) * 1000000
+    exp_below_wit = stats.norm.cdf(lsl, mean, std_within) * 1000000 if std_within > 0 else 0
+    exp_above_wit = (1 - stats.norm.cdf(usl, mean, std_within)) * 1000000 if std_within > 0 else 0
     exp_total_wit = exp_below_wit + exp_above_wit
 
     x_min = min(lsl, data.min()) if len(data) > 0 else lsl
@@ -271,8 +287,9 @@ def create_capability(df_in, col_name, grp_col, lsl, target, usl):
     fig.add_vline(x=target, line_dash="dash", line_color="green", annotation_text="Target", annotation_position="top")
     fig.add_vline(x=usl, line_dash="dash", line_color="red", annotation_text="USL", annotation_position="top")
 
+    title_suffix = f" (Cavity: {cav_val})" if cav_val != "ทั้งหมด (Combined)" else ""
     fig.update_layout(
-        title=dict(text=f"<b>Process Capability Report for {col_name}</b>", x=0.5, xanchor='center'),
+        title=dict(text=f"<b>Process Capability Report for {col_name}{title_suffix}</b>", x=0.5, xanchor='center'),
         xaxis=dict(range=[x_min - span * 0.18, x_max + span * 0.18], tickformat=".4f", gridcolor="#EAEAEA"),
         yaxis=dict(gridcolor="#EAEAEA", showticklabels=False),
         plot_bgcolor="white",
@@ -291,18 +308,17 @@ def create_capability(df_in, col_name, grp_col, lsl, target, usl):
     return fig, metrics
 
 # ==============================================================================
-# ฟังก์ชันสร้าง Probability Plot
+# ฟังก์ชันสร้าง Probability Plot (รองรับการกรอง Cavity แยกเดี่ยวๆ เช่นกัน)
 # ==============================================================================
-def create_prob_plot(df_in, col_name, grp_col):
-    valid_df = df_in[[col_name] + ([grp_col] if grp_col != "ไม่แยกกลุ่ม" else [])].dropna(subset=[col_name]).copy()
-    valid_df["Row_ID"] = valid_df.index
-    valid_df[col_name] = pd.to_numeric(valid_df[col_name], errors='coerce')
-    valid_df = valid_df.dropna(subset=[col_name])
-    
+def create_prob_plot(df_in, col_name, grp_col, cav_val):
+    valid_df = get_filtered_data(df_in, col_name, grp_col, cav_val)
     data = valid_df[col_name]
     n = len(data)
+    if n < 3:
+        return None, 1.0, 1.0, 0, 0, n
+        
     mean = data.mean()
-    std_overall = data.std(ddof=1)
+    std_overall = data.std(ddof=1) if n > 1 else 0.0001
 
     ad_res = stats.anderson(data, dist='norm')
     ad_stat = ad_res.statistic
@@ -325,6 +341,7 @@ def create_prob_plot(df_in, col_name, grp_col):
     tick_probs = [0.1, 1, 5, 10, 20, 30, 40, 50, 60, 70, 80, 90, 95, 99, 99.9]
     tick_z = stats.norm.ppf(np.array(tick_probs) / 100.0)
 
+    title_suffix = f" (Cavity: {cav_val})" if cav_val != "ทั้งหมด (Combined)" else ""
     fig = go.Figure()
     fig.add_trace(go.Scatter(
         x=sorted_df[col_name], y=z_scores, mode='markers', name='Data',
@@ -335,7 +352,7 @@ def create_prob_plot(df_in, col_name, grp_col):
     fig.add_trace(go.Scatter(x=line_x, y=z_scores, mode='lines', name='Fit Line', line=dict(color='darkred', width=1.8)))
 
     fig.update_layout(
-        title=dict(text=f"<b>Probability Plot of {col_name}</b><br><sup>AD = {ad_stat:.3f}, P-Value = {ad_pval:.4f}</sup>", x=0.5, xanchor='center'),
+        title=dict(text=f"<b>Probability Plot of {col_name}{title_suffix}</b><br><sup>AD = {ad_stat:.3f}, P-Value = {ad_pval:.4f}</sup>", x=0.5, xanchor='center'),
         xaxis=dict(title="Measurement", tickformat=".4f", gridcolor="#EAEAEA"),
         yaxis=dict(title="Percent", tickmode='array', tickvals=tick_z, ticktext=[str(p) for p in tick_probs], gridcolor="#EAEAEA"),
         plot_bgcolor="white",
@@ -374,74 +391,82 @@ with tab1:
 # ----------------- TAB 2: PROCESS CAPABILITY -----------------
 with tab2:
     if "Show ทีละกราฟ" in view_mode:
-        fig_c, m = create_capability(edited_df, selected_col, group_col, lsl_input, target_input, usl_input)
-        col_l, col_m, col_r = st.columns([1.1, 2.5, 1.1])
-        with col_l:
-            st.markdown("##### 📋 Process Data")
-            st.dataframe(pd.DataFrame({
-                "Metric": ["LSL", "Target", "USL", "Sample Mean", "Sample N", "StDev(Overall)", "StDev(Within)"],
-                "Value": [f"{lsl_input:.4f}", f"{target_input:.4f}", f"{usl_input:.4f}", f"{m['Mean']:.6f}", f"{m['N']}", f"{m['StDev(Overall)']:.7f}", f"{m['StDev(Within)']:.7f}"]
-            }).set_index("Metric"), use_container_width=True)
-        with col_m:
-            st.plotly_chart(fig_c, use_container_width=True)
-            
-            st.markdown("##### 📊 Performance (PPM)")
-            perf_df = pd.DataFrame({
-                "Performance": ["PPM < LSL", "PPM > USL", "PPM Total"],
-                "Observed": [f"{m['Obs_Below']:.2f}", f"{m['Obs_Above']:.2f}", f"{m['Obs_Total']:.2f}"],
-                "Expected Overall": [f"{m['Exp_Ovr_Below']:.2f}", f"{m['Exp_Ovr_Above']:.2f}", f"{m['Exp_Ovr_Total']:.2f}"],
-                "Expected Within": [f"{m['Exp_Wit_Below']:.2f}", f"{m['Exp_Wit_Above']:.2f}", f"{m['Exp_Wit_Total']:.2f}"]
-            }).set_index("Performance")
-            st.dataframe(perf_df, use_container_width=True)
-            
-        with col_r:
-            st.markdown("##### 🏆 Capability Indices")
-            st.dataframe(pd.DataFrame({
-                "Index": ["Pp", "PPL", "PPU", "Ppk", "Cpm", "Cp", "CPL", "CPU", "Cpk"],
-                "Value": [
-                    f"{m['Pp']:.2f}", 
-                    f"{(m['Mean']-lsl_input)/(3*m['StDev(Overall)']):.2f}", 
-                    f"{(usl_input-m['Mean'])/(3*m['StDev(Overall)']):.2f}", 
-                    f"{m['Ppk']:.2f}", 
-                    f"{m['Cpm']:.2f}", 
-                    f"{m['Cp']:.2f}", 
-                    f"{(m['Mean']-lsl_input)/(3*m['StDev(Within)']):.2f}", 
-                    f"{(usl_input-m['Mean'])/(3*m['StDev(Within)']):.2f}", 
-                    f"{m['Cpk']:.2f}"
-                ]
-            }).set_index("Index"), use_container_width=True)
+        fig_c, m = create_capability(edited_df, selected_col, group_col, cavity_filter, lsl_input, target_input, usl_input)
+        if m:
+            col_l, col_m, col_r = st.columns([1.1, 2.5, 1.1])
+            with col_l:
+                st.markdown("##### 📋 Process Data")
+                st.dataframe(pd.DataFrame({
+                    "Metric": ["LSL", "Target", "USL", "Sample Mean", "Sample N", "StDev(Overall)", "StDev(Within)"],
+                    "Value": [f"{lsl_input:.4f}", f"{target_input:.4f}", f"{usl_input:.4f}", f"{m['Mean']:.6f}", f"{m['N']}", f"{m['StDev(Overall)']:.7f}", f"{m['StDev(Within)']:.7f}"]
+                }).set_index("Metric"), use_container_width=True)
+            with col_m:
+                st.plotly_chart(fig_c, use_container_width=True)
+                
+                st.markdown("##### 📊 Performance (PPM)")
+                perf_df = pd.DataFrame({
+                    "Performance": ["PPM < LSL", "PPM > USL", "PPM Total"],
+                    "Observed": [f"{m['Obs_Below']:.2f}", f"{m['Obs_Above']:.2f}", f"{m['Obs_Total']:.2f}"],
+                    "Expected Overall": [f"{m['Exp_Ovr_Below']:.2f}", f"{m['Exp_Ovr_Above']:.2f}", f"{m['Exp_Ovr_Total']:.2f}"],
+                    "Expected Within": [f"{m['Exp_Wit_Below']:.2f}", f"{m['Exp_Wit_Above']:.2f}", f"{m['Exp_Wit_Total']:.2f}"]
+                }).set_index("Performance")
+                st.dataframe(perf_df, use_container_width=True)
+                
+            with col_r:
+                st.markdown("##### 🏆 Capability Indices")
+                st.dataframe(pd.DataFrame({
+                    "Index": ["Pp", "PPL", "PPU", "Ppk", "Cpm", "Cp", "CPL", "CPU", "Cpk"],
+                    "Value": [
+                        f"{m['Pp']:.2f}", 
+                        f"{(m['Mean']-lsl_input)/(3*m['StDev(Overall)'] if m['StDev(Overall)'] > 0 else 1):.2f}", 
+                        f"{(usl_input-m['Mean'])/(3*m['StDev(Overall)'] if m['StDev(Overall)'] > 0 else 1):.2f}", 
+                        f"{m['Ppk']:.2f}", 
+                        f"{m['Cpm']:.2f}", 
+                        f"{m['Cp']:.2f}", 
+                        f"{(m['Mean']-lsl_input)/(3*m['StDev(Within)'] if m['StDev(Within)'] > 0 else 1):.2f}", 
+                        f"{(usl_input-m['Mean'])/(3*m['StDev(Within)'] if m['StDev(Within)'] > 0 else 1):.2f}", 
+                        f"{m['Cpk']:.2f}"
+                    ]
+                }).set_index("Index"), use_container_width=True)
+        else:
+            st.warning("ข้อมูลไม่เพียงพอสำหรับการคำนวณในกลุ่มที่เลือก")
     else:
-        st.subheader(f"📈 แสดง Process Capability ทั้งหมด ({len(cols_to_plot)} พอยต์)")
+        st.subheader(f"📈 แสดง Process Capability ทั้งหมด ({len(cols_to_plot)} พอยต์ - {cavity_filter})")
         grid_cols = st.columns(2)
         for idx, col_name in enumerate(cols_to_plot):
             c_lsl, c_target, c_usl = parse_spec_from_col(col_name)
-            fig_c, m = create_capability(edited_df, col_name, group_col, c_lsl, c_target, c_usl)
-            with grid_cols[idx % 2]:
-                st.plotly_chart(fig_c, use_container_width=True)
-                st.caption(f"**{col_name}** | N: {m['N']} | Mean: `{m['Mean']:.5f}` | **Cp:** `{m['Cp']:.2f}` | **Cpk:** `{m['Cpk']:.2f}` | **Ppk:** `{m['Ppk']:.2f}`")
-                st.divider()
+            fig_c, m = create_capability(edited_df, col_name, group_col, cavity_filter, c_lsl, c_target, c_usl)
+            if m:
+                with grid_cols[idx % 2]:
+                    st.plotly_chart(fig_c, use_container_width=True)
+                    st.caption(f"**{col_name}** | N: {m['N']} | Mean: `{m['Mean']:.5f}` | **Cp:** `{m['Cp']:.2f}` | **Cpk:** `{m['Cpk']:.2f}` | **Ppk:** `{m['Ppk']:.2f}`")
+                    st.divider()
 
 # ----------------- TAB 3: PROBABILITY PLOT -----------------
 with tab3:
     if "Show ทีละกราฟ" in view_mode:
-        fig_p, ad_stat, ad_pval, mean, std, n = create_prob_plot(edited_df, selected_col, group_col)
-        c1, c2 = st.columns([2.5, 1])
-        with c1:
-            st.plotly_chart(fig_p, use_container_width=True)
-        with c2:
-            st.markdown("##### 🎯 Normality Test")
-            if ad_pval >= 0.05:
-                st.success(f"✅ **Normal Distribution**\n\n(P-Value = {ad_pval:.4f} ≥ 0.05)")
-            else:
-                st.error(f"❌ **Non-Normal**\n\n(P-Value = {ad_pval:.4f} < 0.05)")
-            st.metric("P-Value (Anderson-Darling)", f"{ad_pval:.4f}")
-            st.metric("AD Statistic", f"{ad_stat:.3f}")
-            st.metric("Mean / StDev", f"{mean:.5f} / {std:.6f}")
-            st.info("💡 **ทริค:** เอาเมาส์ชี้จุดที่กระโดดออกจากเส้นเพื่อดูเลข **Row #** แล้วเลื่อนขึ้นไปแก้ตัวเลขที่แถวนั้นในตารางด้านบน กราฟจะอัปเดตทันที!")
+        fig_p, ad_stat, ad_pval, mean, std, n = create_prob_plot(edited_df, selected_col, group_col, cavity_filter)
+        if n >= 3:
+            c1, c2 = st.columns([2.5, 1])
+            with c1:
+                st.plotly_chart(fig_p, use_container_width=True)
+            with c2:
+                st.markdown("##### 🎯 Normality Test")
+                if ad_pval >= 0.05:
+                    st.success(f"✅ **Normal Distribution**\n\n(P-Value = {ad_pval:.4f} ≥ 0.05)")
+                else:
+                    st.error(f"❌ **Non-Normal**\n\n(P-Value = {ad_pval:.4f} < 0.05)")
+                st.metric("P-Value (Anderson-Darling)", f"{ad_pval:.4f}")
+                st.metric("AD Statistic", f"{ad_stat:.3f}")
+                st.metric("Mean / StDev", f"{mean:.5f} / {std:.6f}")
+                st.info("💡 **ทริค:** เอาเมาส์ชี้จุดที่กระโดดออกจากเส้นเพื่อดูเลข **Row #** แล้วเลื่อนขึ้นไปแก้ตัวเลขที่แถวนั้นในตารางด้านบน กราฟจะอัปเดตทันที!")
+        else:
+            st.warning("ข้อมูลน้อยเกินไปสำหรับการรัน Probability Plot (ต้องการอย่างน้อย 3 แถว)")
     else:
-        st.subheader(f"🎯 แสดง Probability Plot ทั้งหมด ({len(cols_to_plot)} พอยต์)")
+        st.subheader(f"🎯 แสดง Probability Plot ทั้งหมด ({len(cols_to_plot)} พอยต์ - {cavity_filter})")
         grid_cols = st.columns(2)
         for idx, col_name in enumerate(cols_to_plot):
-            fig_p, ad_stat, ad_pval, mean, std, n = create_prob_plot(edited_df, col_name, group_col)
-            with grid_cols[idx % 2]:
-                st.plotly_chart(fig_p, use_container_width=True)
+            fig_p, ad_stat, ad_pval, mean, std, n = create_prob_plot(edited_df, col_name, group_col, cavity_filter)
+            if n >= 3:
+                with grid_cols[idx % 2]:
+                    st.plotly_chart(fig_p, use_container_width=True)
