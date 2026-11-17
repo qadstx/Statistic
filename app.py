@@ -2,6 +2,7 @@ import streamlit as st
 import pandas as pd
 import numpy as np
 from scipy import stats
+from scipy.special import gammaln
 import plotly.graph_objects as go
 import re
 from io import BytesIO
@@ -23,6 +24,27 @@ def parse_spec_from_col(col_name):
         tol = float(match.group(2))
         return round(target - tol, 6), target, round(target + tol, 6)
     return 0.3265, 0.3280, 0.3295
+
+# --- ค่าคงที่ unbiasing ตาม Minitab ---
+def c4(n):
+    return np.sqrt(2.0 / (n - 1)) * np.exp(gammaln(n / 2.0) - gammaln((n - 1) / 2.0))
+
+def calc_within(values, subgroup_size=1):
+    """StDev(Within) แบบ Minitab
+    - subgroup_size = 1 : Moving Range (MRbar / 1.128)
+    - subgroup_size > 1 : Pooled StDev หารด้วย c4(d+1) (unbiasing constant)
+    """
+    x = np.asarray(values, dtype=float)
+    if subgroup_size <= 1:
+        mr = np.abs(np.diff(x))
+        return mr.mean() / 1.128 if len(mr) > 0 else np.nan
+    groups = [x[i:i + subgroup_size] for i in range(0, len(x), subgroup_size)]
+    groups = [g for g in groups if len(g) > 1]
+    if not groups:
+        return np.nan
+    ss = sum(((g - g.mean()) ** 2).sum() for g in groups)
+    d = sum(len(g) - 1 for g in groups)
+    return np.sqrt(ss / d) / c4(d + 1)
 
 # --- 1. ส่วนจัดการข้อมูล (Upload หรือ ตารางเปล่าให้กรอก) ---
 st.sidebar.header("📁 1. จัดการข้อมูล (Data Input)")
@@ -121,6 +143,12 @@ if group_col != "ไม่แยกกลุ่ม" and group_col in edited_df.c
     unique_cavities = ["ทั้งหมด (Combined)"] + list(edited_df[group_col].dropna().unique())
     cavity_filter = st.sidebar.selectbox("🎯 เลือก Cavity ที่ต้องการวิเคราะห์เดี่ยวๆ:", unique_cavities)
 
+# Subgroup size (ตั้งให้เหมือนที่ใช้ใน Minitab > Capability Analysis)
+subgroup_size = st.sidebar.number_input(
+    "Subgroup size (เหมือนใน Minitab)", min_value=1, value=1, step=1,
+    help="1 = ใช้ Moving Range, มากกว่า 1 = ใช้ Pooled StDev (หารด้วย c4)"
+)
+
 if "Show ทีละกราฟ" in view_mode:
     selected_col = st.sidebar.selectbox("เลือกพอยต์ที่ต้องการวิเคราะห์:", num_cols)
     auto_lsl, auto_target, auto_usl = parse_spec_from_col(selected_col)
@@ -138,7 +166,7 @@ def get_filtered_data(df_in, col_name, grp_col, cav_val):
     temp_df["Row_ID"] = temp_df.index
     temp_df[col_name] = pd.to_numeric(temp_df[col_name], errors='coerce')
     temp_df = temp_df.dropna(subset=[col_name])
-    
+
     if grp_col != "ไม่แยกกลุ่ม" and cav_val != "ทั้งหมด (Combined)":
         temp_df = temp_df[temp_df[grp_col].astype(str) == str(cav_val)]
     return temp_df
@@ -151,10 +179,10 @@ def create_boxplot(df_in, col_name, grp_col, lsl, target, usl):
     valid_df["Row_ID"] = valid_df.index
     valid_df[col_name] = pd.to_numeric(valid_df[col_name], errors='coerce')
     valid_df = valid_df.dropna(subset=[col_name])
-    
+
     fig = go.Figure()
     fill_rgba = hex_to_rgba(box_fill_hex, 0.85)
-    
+
     if grp_col != "ไม่แยกกลุ่ม":
         for grp, grp_df in valid_df.groupby(grp_col):
             fig.add_trace(go.Box(
@@ -216,47 +244,31 @@ def create_boxplot(df_in, col_name, grp_col, lsl, target, usl):
     return fig
 
 # ==============================================================================
-# ฟังก์ชันสร้าง Capability (รองรับการกรอง Cavity แยกเดี่ยวๆ แล้ว N จะเป็น 32)
+# ฟังก์ชันสร้าง Capability (StDev Within / Cpm ปรับให้ตรง Minitab)
 # ==============================================================================
-def create_capability(df_in, col_name, grp_col, cav_val, lsl, target, usl):
+def create_capability(df_in, col_name, grp_col, cav_val, lsl, target, usl, subgroup_size=1):
     valid_df = get_filtered_data(df_in, col_name, grp_col, cav_val)
     data = valid_df[col_name]
     n = len(data)
     if n == 0:
         return None, {}
-        
+
     mean = data.mean()
     std_overall = data.std(ddof=1) if n > 1 else 0.0001
-    
-    # คำนวณ StDev(Within) ให้ตรงกับ Minitab เป๊ะ (ใช้ Pooled StDev หรือ R-bar/d2)
-    if grp_col != "ไม่แยกกลุ่ม" and grp_col in df_in.columns:
-        # ดึงข้อมูลทั้งหมดก่อนกรองมาจัดกลุ่ม Subgroup ตามลำดับแถว (Row-by-Row pairing)
-        full_valid = df_in[[col_name, grp_col]].dropna(subset=[col_name]).copy()
-        full_valid[col_name] = pd.to_numeric(full_valid[col_name], errors='coerce')
-        
-        # ถ้าเลือกดูแบบ Combined (ทุก Cavity) หรือแยก Cavity Minitab จะคำนวณจากความแปรปรวนภายในกลุ่มย่อย
-        subgroups = [group[col_name].values for _, group in full_valid.groupby(grp_col) if len(group) > 1]
-        if len(subgroups) > 0:
-            # Pooled Variance formula ตาม Minitab
-            sum_sq = sum(np.sum((sg - sg.mean())**2) for sg in subgroups if len(sg) > 1)
-            sum_df = sum(len(sg) - 1 for sg in subgroups if len(sg) > 1)
-            std_within = np.sqrt(sum_sq / sum_df) if sum_df > 0 else std_overall
-        else:
-            std_within = std_overall
-    else:
-        mr = np.abs(np.diff(data))
-        std_within = mr.mean() / 1.128 if len(mr) > 0 and mr.mean() > 0 else std_overall
 
-    # ถ้ารันแบบเจาะจง Cavity เดี่ยว Minitab มักจะใช้ Moving Range ของ Cavity นั้นๆ คูณค่า d2
-    if cav_val != "ทั้งหมด (Combined)":
-        mr = np.abs(np.diff(data))
-        std_within = mr.mean() / 1.128 if len(mr) > 0 and mr.mean() > 0 else std_overall
+    # StDev(Within): ตามลำดับแถวของข้อมูลที่กรองแล้ว + Subgroup size ที่ผู้ใช้ตั้ง
+    std_within = calc_within(data.values, subgroup_size)
+    if not np.isfinite(std_within) or std_within <= 0:
+        std_within = std_overall
 
     pp = (usl - lsl) / (6 * std_overall) if std_overall > 0 else 0
     ppl = (mean - lsl) / (3 * std_overall) if std_overall > 0 else 0
     ppu = (usl - mean) / (3 * std_overall) if std_overall > 0 else 0
     ppk = min(ppl, ppu)
-    cpm = (usl - lsl) / (6 * np.sqrt(std_overall**2 + (mean - target)**2)) if std_overall > 0 else 0
+
+    # Cpm ตามสูตร Minitab
+    s_t = np.sqrt(((data - target) ** 2).sum() / (n - 1)) if n > 1 else 0
+    cpm = min(usl - target, target - lsl) / (3 * s_t) if s_t > 0 else 0
 
     cp = (usl - lsl) / (6 * std_within) if std_within > 0 else 0
     cpl = (mean - lsl) / (3 * std_within) if std_within > 0 else 0
@@ -307,7 +319,7 @@ def create_capability(df_in, col_name, grp_col, cav_val, lsl, target, usl):
         height=chart_height,
         margin=dict(l=40, r=40, t=55, b=50)
     )
-    
+
     metrics = {
         "N": n, "Mean": mean, "StDev(Overall)": std_overall, "StDev(Within)": std_within,
         "Cp": cp, "Cpk": cpk, "Pp": pp, "Ppk": ppk, "Cpm": cpm,
@@ -316,6 +328,7 @@ def create_capability(df_in, col_name, grp_col, cav_val, lsl, target, usl):
         "Exp_Wit_Below": exp_below_wit, "Exp_Wit_Above": exp_above_wit, "Exp_Wit_Total": exp_total_wit
     }
     return fig, metrics
+
 # ==============================================================================
 # ฟังก์ชันสร้าง Probability Plot (รองรับการกรอง Cavity แยกเดี่ยวๆ เช่นกัน)
 # ==============================================================================
@@ -325,7 +338,7 @@ def create_prob_plot(df_in, col_name, grp_col, cav_val):
     n = len(data)
     if n < 3:
         return None, 1.0, 1.0, 0, 0, n
-        
+
     mean = data.mean()
     std_overall = data.std(ddof=1) if n > 1 else 0.0001
 
@@ -400,7 +413,8 @@ with tab1:
 # ----------------- TAB 2: PROCESS CAPABILITY -----------------
 with tab2:
     if "Show ทีละกราฟ" in view_mode:
-        fig_c, m = create_capability(edited_df, selected_col, group_col, cavity_filter, lsl_input, target_input, usl_input)
+        fig_c, m = create_capability(edited_df, selected_col, group_col, cavity_filter,
+                                     lsl_input, target_input, usl_input, subgroup_size)
         if m:
             col_l, col_m, col_r = st.columns([1.1, 2.5, 1.1])
             with col_l:
@@ -411,7 +425,7 @@ with tab2:
                 }).set_index("Metric"), use_container_width=True)
             with col_m:
                 st.plotly_chart(fig_c, use_container_width=True)
-                
+
                 st.markdown("##### 📊 Performance (PPM)")
                 perf_df = pd.DataFrame({
                     "Performance": ["PPM < LSL", "PPM > USL", "PPM Total"],
@@ -420,20 +434,20 @@ with tab2:
                     "Expected Within": [f"{m['Exp_Wit_Below']:.2f}", f"{m['Exp_Wit_Above']:.2f}", f"{m['Exp_Wit_Total']:.2f}"]
                 }).set_index("Performance")
                 st.dataframe(perf_df, use_container_width=True)
-                
+
             with col_r:
                 st.markdown("##### 🏆 Capability Indices")
                 st.dataframe(pd.DataFrame({
                     "Index": ["Pp", "PPL", "PPU", "Ppk", "Cpm", "Cp", "CPL", "CPU", "Cpk"],
                     "Value": [
-                        f"{m['Pp']:.2f}", 
-                        f"{(m['Mean']-lsl_input)/(3*m['StDev(Overall)'] if m['StDev(Overall)'] > 0 else 1):.2f}", 
-                        f"{(usl_input-m['Mean'])/(3*m['StDev(Overall)'] if m['StDev(Overall)'] > 0 else 1):.2f}", 
-                        f"{m['Ppk']:.2f}", 
-                        f"{m['Cpm']:.2f}", 
-                        f"{m['Cp']:.2f}", 
-                        f"{(m['Mean']-lsl_input)/(3*m['StDev(Within)'] if m['StDev(Within)'] > 0 else 1):.2f}", 
-                        f"{(usl_input-m['Mean'])/(3*m['StDev(Within)'] if m['StDev(Within)'] > 0 else 1):.2f}", 
+                        f"{m['Pp']:.2f}",
+                        f"{(m['Mean']-lsl_input)/(3*m['StDev(Overall)'] if m['StDev(Overall)'] > 0 else 1):.2f}",
+                        f"{(usl_input-m['Mean'])/(3*m['StDev(Overall)'] if m['StDev(Overall)'] > 0 else 1):.2f}",
+                        f"{m['Ppk']:.2f}",
+                        f"{m['Cpm']:.2f}",
+                        f"{m['Cp']:.2f}",
+                        f"{(m['Mean']-lsl_input)/(3*m['StDev(Within)'] if m['StDev(Within)'] > 0 else 1):.2f}",
+                        f"{(usl_input-m['Mean'])/(3*m['StDev(Within)'] if m['StDev(Within)'] > 0 else 1):.2f}",
                         f"{m['Cpk']:.2f}"
                     ]
                 }).set_index("Index"), use_container_width=True)
@@ -444,7 +458,8 @@ with tab2:
         grid_cols = st.columns(2)
         for idx, col_name in enumerate(cols_to_plot):
             c_lsl, c_target, c_usl = parse_spec_from_col(col_name)
-            fig_c, m = create_capability(edited_df, col_name, group_col, cavity_filter, c_lsl, c_target, c_usl)
+            fig_c, m = create_capability(edited_df, col_name, group_col, cavity_filter,
+                                         c_lsl, c_target, c_usl, subgroup_size)
             if m:
                 with grid_cols[idx % 2]:
                     st.plotly_chart(fig_c, use_container_width=True)
