@@ -57,7 +57,6 @@ if st.sidebar.button("🧹 ล้างตาราง (สร้างตาร
     empty_df.index.name = "Row"
     st.session_state.df = empty_df
 
-# บังคับให้ Index เริ่มที่ 1 เสมอ เพื่อให้เลขแถวแสดงในตารางชัดเจน
 st.session_state.df.index = np.arange(1, len(st.session_state.df) + 1)
 st.session_state.df.index.name = "Row"
 
@@ -72,7 +71,6 @@ with st.expander("📝 ตารางข้อมูล (มีเลขแถ�
         },
         key="data_editor"
     )
-    # รีเซ็ตเลขแถวกรณีมีการกดเพิ่ม/ลบแถวใหม่
     edited_df.index = np.arange(1, len(edited_df) + 1)
     edited_df.index.name = "Row"
 
@@ -130,9 +128,8 @@ else:
     st.sidebar.caption("💡 ในโหมดแสดงทั้งหมด ระบบจะดึงค่า USL / Target / LSL จากชื่อหัวคอลัมน์ให้อัตโนมัติ")
 
 # ==============================================================================
-# ฟังก์ชันสร้างกราฟทั้ง 3 รูปแบบ (ใช้ซ้ำได้ทั้งโหมดทีละกราฟและโหมดแสดงทั้งหมด)
+# ฟังก์ชันสร้างกราฟ Boxplot
 # ==============================================================================
-
 def create_boxplot(df_in, col_name, grp_col, lsl, target, usl):
     valid_df = df_in[[col_name] + ([grp_col] if grp_col != "ไม่แยกกลุ่ม" else [])].dropna(subset=[col_name]).copy()
     valid_df["Row_ID"] = valid_df.index
@@ -170,7 +167,6 @@ def create_boxplot(df_in, col_name, grp_col, lsl, target, usl):
             marker=dict(color="red", size=7, symbol="asterisk")
         ))
 
-    # ตีเส้นประ USL / Target / LSL เหมือน Minitab
     fig.add_hline(y=usl, line_dash="dash", line_color="red", line_width=1.5,
                   annotation_text=f" {usl}", annotation_position="right", annotation_font_color="black")
     fig.add_hline(y=target, line_dash="dash", line_color="limegreen", line_width=1.5,
@@ -178,7 +174,6 @@ def create_boxplot(df_in, col_name, grp_col, lsl, target, usl):
     fig.add_hline(y=lsl, line_dash="dash", line_color="red", line_width=1.5,
                   annotation_text=f" {lsl}", annotation_position="right", annotation_font_color="black")
 
-    # คำนวณขอบเขตแกน Y ให้เห็นเส้น LSL และ USL ครบเสมอ ไม่โดนตัดขอบ
     y_min = min(lsl, valid_df[col_name].min()) if len(valid_df) > 0 else lsl
     y_max = max(usl, valid_df[col_name].max()) if len(valid_df) > 0 else usl
     span = y_max - y_min if y_max > y_min else 0.003
@@ -204,9 +199,10 @@ def create_boxplot(df_in, col_name, grp_col, lsl, target, usl):
     fig.update_yaxes(showline=True, linewidth=1, linecolor='#999999', mirror=True)
     return fig
 
-
+# ==============================================================================
+# ฟังก์ชันสร้าง Capability ตรงตาม Minitab (StDev Within แยก Subgroup Cavity)
+# ==============================================================================
 def create_capability(df_in, col_name, grp_col, lsl, target, usl):
-    # กรองเฉพาะข้อมูลที่ไม่ว่าง
     valid_df = df_in[[col_name] + ([grp_col] if grp_col != "ไม่แยกกลุ่ม" else [])].dropna(subset=[col_name]).copy()
     valid_df[col_name] = pd.to_numeric(valid_df[col_name], errors='coerce')
     valid_df = valid_df.dropna(subset=[col_name])
@@ -216,14 +212,12 @@ def create_capability(df_in, col_name, grp_col, lsl, target, usl):
     mean = data.mean()
     std_overall = data.std(ddof=1)
     
-    # คำนวณ StDev(Within) ตามหลัก Minitab (R-bar / d2 หรือ Pooled StDev ตาม Subgroup Cavity)
     if grp_col != "ไม่แยกกลุ่ม" and grp_col in valid_df.columns:
         subgroups = []
         for _, grp_df in valid_df.groupby(grp_col):
             if len(grp_df) > 1:
                 subgroups.append(grp_df[col_name].values)
         if len(subgroups) > 0:
-            # คำนวณ Within-group standard deviation (Pooled Standard Deviation)
             variances = [np.var(sg, ddof=1) for sg in subgroups if len(sg) > 1]
             std_within = np.sqrt(np.mean(variances)) if len(variances) > 0 else std_overall
         else:
@@ -232,7 +226,6 @@ def create_capability(df_in, col_name, grp_col, lsl, target, usl):
         mr = np.abs(np.diff(data))
         std_within = mr.mean() / 1.128 if len(mr) > 0 and mr.mean() > 0 else std_overall
 
-    # คำนวณค่า Cp, Cpk, Pp, Ppk
     pp = (usl - lsl) / (6 * std_overall) if std_overall > 0 else 0
     ppl = (mean - lsl) / (3 * std_overall) if std_overall > 0 else 0
     ppu = (usl - mean) / (3 * std_overall) if std_overall > 0 else 0
@@ -244,9 +237,8 @@ def create_capability(df_in, col_name, grp_col, lsl, target, usl):
     cpu = (usl - mean) / (3 * std_within) if std_within > 0 else 0
     cpk = min(cpl, cpu)
 
-    # คำนวณ PPM (Observed & Expected)
-    obs_below = (data < lsl).sum() / n * 1000000
-    obs_above = (data > usl).sum() / n * 1000000
+    obs_below = (data < lsl).sum() / n * 1000000 if n > 0 else 0
+    obs_above = (data > usl).sum() / n * 1000000 if n > 0 else 0
     obs_total = obs_below + obs_above
 
     exp_below_ovr = stats.norm.cdf(lsl, mean, std_overall) * 1000000
@@ -257,9 +249,8 @@ def create_capability(df_in, col_name, grp_col, lsl, target, usl):
     exp_above_wit = (1 - stats.norm.cdf(usl, mean, std_within)) * 1000000
     exp_total_wit = exp_below_wit + exp_above_wit
 
-    # สร้างกราฟ Histogram แบบ Probability Density ให้หน้าตาเหมือน Minitab
-    x_min = min(lsl, data.min())
-    x_max = max(usl, data.max())
+    x_min = min(lsl, data.min()) if len(data) > 0 else lsl
+    x_max = max(usl, data.max()) if len(data) > 0 else usl
     span = x_max - x_min if x_max > x_min else 0.003
     x_grid = np.linspace(x_min - span * 0.15, x_max + span * 0.15, 300)
 
@@ -299,7 +290,9 @@ def create_capability(df_in, col_name, grp_col, lsl, target, usl):
     }
     return fig, metrics
 
-
+# ==============================================================================
+# ฟังก์ชันสร้าง Probability Plot
+# ==============================================================================
 def create_prob_plot(df_in, col_name, grp_col):
     valid_df = df_in[[col_name] + ([grp_col] if grp_col != "ไม่แยกกลุ่ม" else [])].dropna(subset=[col_name]).copy()
     valid_df["Row_ID"] = valid_df.index
@@ -354,9 +347,8 @@ def create_prob_plot(df_in, col_name, grp_col):
     return fig, ad_stat, ad_pval, mean, std_overall, n
 
 # ==============================================================================
-# ส่วนแสดงผลหน้าเว็บ (แยก Tab และรองรับทั้ง 2 โหมด: ทีละกราฟ vs ทั้งหมดทีเดียว)
+# ส่วนแสดงผลหน้าเว็บ
 # ==============================================================================
-
 tab1, tab2, tab3 = st.tabs([
     "📦 1. Boxplot (พร้อมเส้น Spec)",
     "📈 2. Process Capability (Histogram & Cpk/Ppk)",
@@ -366,7 +358,6 @@ tab1, tab2, tab3 = st.tabs([
 # ----------------- TAB 1: BOXPLOT -----------------
 with tab1:
     if "Show ทีละกราฟ" in view_mode:
-        # จัดให้อยู่ตรงกลางและไม่กว้างแบนเกินไปเหมือน Minitab
         c_left, c_center, c_right = st.columns([1, 2.2, 1])
         with c_center:
             fig_b = create_boxplot(edited_df, selected_col, group_col, lsl_input, target_input, usl_input)
@@ -394,7 +385,6 @@ with tab2:
         with col_m:
             st.plotly_chart(fig_c, use_container_width=True)
             
-            # เพิ่มตาราง Performance (PPM) ด้านล่างเหมือน Minitab[cite: 11]
             st.markdown("##### 📊 Performance (PPM)")
             perf_df = pd.DataFrame({
                 "Performance": ["PPM < LSL", "PPM > USL", "PPM Total"],
@@ -408,7 +398,17 @@ with tab2:
             st.markdown("##### 🏆 Capability Indices")
             st.dataframe(pd.DataFrame({
                 "Index": ["Pp", "PPL", "PPU", "Ppk", "Cpm", "Cp", "CPL", "CPU", "Cpk"],
-                "Value": [f"{m['Pp']:.2f}", f"{(m['Mean']-lsl_input)/(3*m['StDev(Overall)']):.2f}", f"{(usl_input-m['Mean'])/(3*m['StDev(Overall)']):.2f}", f"{m['Ppk']:.2f}", f"{m['Cpm']:.2f}", f"{m['Cp']:.2f}", f"{(m['Mean']-lsl_input)/(3*m['StDev(Within)']):.2f}", f"{(usl_input-m['Mean'])/(3*m['StDev(Within)']):.2f}", f"{m['Cpk']:.2f}"]
+                "Value": [
+                    f"{m['Pp']:.2f}", 
+                    f"{(m['Mean']-lsl_input)/(3*m['StDev(Overall)']):.2f}", 
+                    f"{(usl_input-m['Mean'])/(3*m['StDev(Overall)']):.2f}", 
+                    f"{m['Ppk']:.2f}", 
+                    f"{m['Cpm']:.2f}", 
+                    f"{m['Cp']:.2f}", 
+                    f"{(m['Mean']-lsl_input)/(3*m['StDev(Within)']):.2f}", 
+                    f"{(usl_input-m['Mean'])/(3*m['StDev(Within)']):.2f}", 
+                    f"{m['Cpk']:.2f}"
+                ]
             }).set_index("Index"), use_container_width=True)
     else:
         st.subheader(f"📈 แสดง Process Capability ทั้งหมด ({len(cols_to_plot)} พอยต์)")
