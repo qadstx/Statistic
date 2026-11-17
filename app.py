@@ -8,7 +8,7 @@ import re
 from io import BytesIO
 
 st.set_page_config(page_title="Mini-QAD Statistical Tool", layout="wide")
-st.title("📊 Minitab Alternative: Boxplot, Capability & Probability Plot")
+st.title("Project Minitab จีนแดง")
 
 # --- ฟังก์ชันแปลงรหัสสี Hex เป็น RGBA ---
 def hex_to_rgba(hex_color, opacity=0.85):
