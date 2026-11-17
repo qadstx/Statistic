@@ -274,7 +274,7 @@ def create_boxplot(df_in, col_name, grp_col, lsl, target, usl):
     return fig
 
 # ==============================================================================
-# ฟังก์ชันสร้าง Capability 
+# ฟังก์ชันสร้าง Capability (กดฐานกราฟติดขอบล่าง 0 เป๊ะ และเว้นขอบซ้ายขวาให้ LSL/USL)
 # ==============================================================================
 def create_capability(df_in, col_name, grp_col, cav_val, lsl, target, usl, subgroup_size=1):
     valid_df = get_filtered_data(df_in, col_name, grp_col, cav_val)
@@ -318,6 +318,12 @@ def create_capability(df_in, col_name, grp_col, cav_val, lsl, target, usl, subgr
     d_min, d_max = float(data.min()), float(data.max())
     ax_lo, ax_hi = min(lsl, d_min), max(usl, d_max)
     span = ax_hi - ax_lo if ax_hi > ax_lo else 0.003
+    
+    # เผื่อขอบซ้ายและขวาของ LSL / USL ออกไปข้างละ 6% เพื่อให้เห็นเส้นประสีแดงและมีพื้นที่ว่างด้านข้างเหมือนต้นฉบับ Minitab
+    x_pad = span * 0.06
+    x_range_lo = ax_lo - x_pad
+    x_range_hi = ax_hi + x_pad
+
     raw = span / 8
     mag = 10 ** np.floor(np.log10(raw))
     step = next((k * mag for k in (1, 2, 4, 5, 10) if k * mag >= raw * 0.999), 10 * mag)
@@ -330,7 +336,20 @@ def create_capability(df_in, col_name, grp_col, cav_val, lsl, target, usl, subgr
     b_start = t0 - bin_w / 2
     b_start += np.floor((d_min - b_start) / bin_w) * bin_w
     b_end = b_start + bin_w * (np.floor((d_max - b_start) / bin_w) + 1)
-    x_grid = np.linspace(ax_lo, ax_hi, 400)
+    x_grid = np.linspace(x_range_lo, x_range_hi, 500)
+
+    # คำนวณค่าสูงสุดของแกน Y เพื่อล็อก range=[0, y_max] ให้ฐานกราฟติดเส้นขอบล่าง 0 สนิท
+    y_max_val = 1.0
+    if std_overall > 0:
+        y_max_val = max(y_max_val, float(stats.norm.pdf(mean, mean, std_overall)))
+    if std_within > 0:
+        y_max_val = max(y_max_val, float(stats.norm.pdf(mean, mean, std_within)))
+    if n > 0 and bin_w > 0:
+        bins_arr = np.arange(b_start, b_end + bin_w * 1.5, bin_w)
+        if len(bins_arr) > 1:
+            hist_vals, _ = np.histogram(data, bins=bins_arr, density=True)
+            if len(hist_vals) > 0:
+                y_max_val = max(y_max_val, float(np.max(hist_vals)))
 
     RED, GREEN, GRAY = "#8B1A1A", "#0B6623", "#555555"
     FONT = "Segoe UI, Arial, sans-serif"
@@ -360,6 +379,7 @@ def create_capability(df_in, col_name, grp_col, cav_val, lsl, target, usl, subgr
         fig.add_annotation(x=x, y=y, xref="paper", yref="paper", text=txt, showarrow=False,
                            xanchor=anchor, yanchor="middle", font=dict(size=size, color="#222222", family=FONT))
 
+    # ตัดคำว่า (Cavity: ...) ออกจากหัวกราฟตามที่ต้องการ
     _t(0.5, 0.955, f"Process Capability Report for {col_name}", "center", 24)
 
     _t(0.155, 0.838, "Process Data", "center")
@@ -404,11 +424,12 @@ def create_capability(df_in, col_name, grp_col, cav_val, lsl, target, usl, subgr
 
     _t(0.02, 0.025, "The actual process spread is represented by 6 sigma.", "left", 17, italic=True)
 
+    # ล็อกแกน Y ที่ range=[0, y_max_val * 1.08] ให้กราฟลงมาติดขอบล่างสนิท และแกน X เผื่อขอบซ้ายขวาให้ LSL/USL
     fig.update_layout(
-        xaxis=dict(domain=[0.306, 0.721], range=[ax_lo - span*0.12, ax_hi + span*0.12], tickmode='array', tickvals=ticks,
+        xaxis=dict(domain=[0.306, 0.721], range=[x_range_lo, x_range_hi], tickmode='array', tickvals=ticks,
                    ticktext=[f"{t:.{dec}f}" for t in ticks], tickangle=-45, tickfont=dict(size=14, family=FONT),
                    showgrid=True, gridcolor="#E6E6E6", showline=True, linecolor="#888888", mirror=True),
-        yaxis=dict(domain=[0.359, PLOT_TOP], showticklabels=False, showgrid=True, gridcolor="#E6E6E6",
+        yaxis=dict(domain=[0.359, PLOT_TOP], range=[0, y_max_val * 1.08], showticklabels=False, showgrid=True, gridcolor="#E6E6E6",
                    zeroline=False, showline=True, linecolor="#888888", mirror=True, nticks=6),
         bargap=0, showlegend=False,
         plot_bgcolor="white", paper_bgcolor="#DDDDDD",
@@ -473,7 +494,7 @@ def diagnose_capability(data, lsl, target, usl, subgroup_size=1):
     return pd.DataFrame(rows), pd.DataFrame(cpm_rows)
 
 # ==============================================================================
-# ฟังก์ชันสร้าง Probability Plot
+# ฟังก์ชันสร้าง Probability Plot (เอาคำว่า Cavity ออกจากหัวกราฟ)
 # ==============================================================================
 def create_prob_plot(df_in, col_name, grp_col, cav_val):
     valid_df = get_filtered_data(df_in, col_name, grp_col, cav_val)
@@ -515,6 +536,7 @@ def create_prob_plot(df_in, col_name, grp_col, cav_val):
     ))
     fig.add_trace(go.Scatter(x=line_x, y=z_scores, mode='lines', name='Fit Line', line=dict(color='darkred', width=1.8)))
 
+    # ตัดคำว่า (Cavity: ...) ออกจากหัวกราฟตามที่ต้องการ
     fig.update_layout(
         title=dict(text=f"<b>Probability Plot of {col_name}</b><br><sup>AD = {ad_stat:.3f}, P-Value = {ad_pval:.4f}</sup>", x=0.5, xanchor='center'),
         xaxis=dict(title="Measurement", tickformat=".4f", gridcolor="#EAEAEA"),
@@ -719,3 +741,4 @@ with st.sidebar:
             _fname = "all_charts.zip" if _t_name == "ทั้งหมด" else f"{EXPORT_FILE[_t_name]}.zip"
             st.download_button(f"⬇️ {_t_name} (.zip)", data=_bytes, file_name=_fname,
                                mime="application/zip", use_container_width=True, key=f"dl_{_t_name}")
+        st.caption("ถ้าเปลี่ยน setting ให้กดสร้างรูปใหม่ทุกครั้ง")
