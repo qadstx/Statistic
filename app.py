@@ -6,9 +6,10 @@ from scipy.special import gammaln
 import plotly.graph_objects as go
 import re
 from io import BytesIO
+import zipfile
 
 st.set_page_config(page_title="Mini-QAD Statistical Tool", layout="wide")
-st.title("Project Minitab จีนแดง")
+st.title("📊 Minitab Alternative: Boxplot, Capability & Probability Plot")
 
 # --- ฟังก์ชันแปลงรหัสสี Hex เป็น RGBA ---
 def hex_to_rgba(hex_color, opacity=0.85):
@@ -632,3 +633,80 @@ with tab3:
             if n >= 3:
                 with grid_cols[idx % 2]:
                     st.plotly_chart(fig_p, use_container_width=True)
+
+
+# ==============================================================================
+# Export กราฟทั้งหมดตาม Setting ปัจจุบัน เป็นไฟล์รูปภาพ (ZIP)
+# ต้องติดตั้ง: pip install -U kaleido pillow
+# ==============================================================================
+def build_export_zip(points, combine, img_w):
+    from PIL import Image
+    zip_buf = BytesIO()
+    cav_tag = "" if cavity_filter == "ทั้งหมด (Combined)" else f"_Cavity{cavity_filter}"
+    with zipfile.ZipFile(zip_buf, "w", zipfile.ZIP_DEFLATED) as zf:
+        for i, col_name in enumerate(points, 1):
+            if "Show ทีละกราฟ" in view_mode and col_name == selected_col:
+                c_lsl, c_target, c_usl = lsl_input, target_input, usl_input
+            else:
+                c_lsl, c_target, c_usl = parse_spec_from_col(col_name)
+
+            figs = [("boxplot", create_boxplot(edited_df, col_name, group_col, c_lsl, c_target, c_usl))]
+            fig_c, _m = create_capability(edited_df, col_name, group_col, cavity_filter,
+                                          c_lsl, c_target, c_usl, subgroup_size)
+            if fig_c is not None:
+                figs.append(("capability", fig_c))
+            fig_p = create_prob_plot(edited_df, col_name, group_col, cavity_filter)[0]
+            if fig_p is not None:
+                figs.append(("probplot", fig_p))
+
+            pngs = [(kind, f.to_image(format="png", width=img_w, height=chart_height, scale=2))
+                    for kind, f in figs]
+            safe = re.sub(r"[^0-9A-Za-z._-]+", "_", str(col_name)).strip("_")
+            base = f"{i:02d}_{safe}{cav_tag}"
+
+            if combine:
+                ims = [Image.open(BytesIO(b)).convert("RGB") for _, b in pngs]
+                total_w = sum(im.width for im in ims)
+                canvas = Image.new("RGB", (total_w, max(im.height for im in ims)), "white")
+                x_off = 0
+                for im in ims:
+                    canvas.paste(im, (x_off, 0))
+                    x_off += im.width
+                out = BytesIO()
+                canvas.save(out, format="PNG")
+                zf.writestr(f"{base}.png", out.getvalue())
+            else:
+                for kind, b in pngs:
+                    zf.writestr(f"{base}_{kind}.png", b)
+    return zip_buf.getvalue()
+
+with st.sidebar:
+    st.header("🖼️ 4. Export รูปภาพ")
+    export_cols = st.multiselect("พอยต์ที่จะ export:", num_cols, default=num_cols)
+    export_mode = st.radio(
+        "รูปแบบไฟล์:",
+        ["1 ภาพต่อพอยต์ (Boxplot + Capability + Prob Plot เรียงแนวนอน)", "แยกไฟล์ทุกกราฟ (3 ภาพต่อพอยต์)"]
+    )
+    export_w = st.number_input("ความกว้างต่อกราฟ (px)", min_value=500, max_value=1600, value=900, step=100)
+    if st.button("🖼️ สร้างไฟล์ ZIP รูปภาพ", use_container_width=True):
+        if not export_cols:
+            st.warning("เลือกพอยต์อย่างน้อย 1 ตัว")
+        else:
+            try:
+                with st.spinner(f"กำลังสร้างรูป {len(export_cols)} พอยต์..."):
+                    st.session_state.export_zip = build_export_zip(
+                        export_cols, export_mode.startswith("1 ภาพ"), int(export_w)
+                    )
+            except Exception as e:
+                st.session_state.pop("export_zip", None)
+                st.error(f"สร้างรูปไม่สำเร็จ: {e}\n\nลอง: pip install -U kaleido pillow "
+                         "(ถ้าใช้ plotly 6.1+ กับ kaleido 1.x ต้องมี Chrome: รัน plotly_get_chrome)")
+    if "export_zip" in st.session_state:
+        st.download_button(
+            "⬇️ ดาวน์โหลด ZIP รูปภาพ",
+            data=st.session_state.export_zip,
+            file_name="capability_charts.zip",
+            mime="application/zip",
+            use_container_width=True
+        )
+        st.caption("ถ้าเปลี่ยนค่า/Setting ให้กดสร้างใหม่ทุกครั้ง")
