@@ -82,11 +82,11 @@ def smart_sort_list(items):
 if "df" not in st.session_state:
     np.random.seed(42)
     df_init = pd.DataFrame({
-        "B1_0.3282 ± 0.0015": np.round(np.random.normal(0.3282, 0.0004, 32), 5),
-        "B2_0.2843 ± 0.0015": np.round(np.random.normal(0.2843, 0.0004, 32), 5),
+        "B1_0.3282 ± 0.0015": np.round(np.random.normal(0.3278, 0.00018, 32), 5),
+        "B2_0.2843 ± 0.0015": np.round(np.random.normal(0.2845, 0.00018, 32), 5),
+        "Cav": [2]*32,
         "Month": ["June"]*8 + ["July"]*8 + ["Aug"]*8 + ["Sep"]*8,
-        "INV": ["DllQ1110"]*4 + ["DllQ1179"]*4 + ["DllQ1305"]*4 + ["DllQ1443"]*4 + ["DllQ1567"]*4 + ["DllQ1639"]*4 + ["DllQ1769"]*4 + ["DllQ1823"]*4,
-        "Cavity": [2]*32
+        "INV": ["DllQ1110"]*4 + ["DllQ1179"]*4 + ["DllQ1305"]*4 + ["DllQ1443"]*4 + ["DllQ1567"]*4 + ["DllQ1639"]*4 + ["DllQ1769"]*4 + ["DllQ1823"]*4
     })
     df_init.index = np.arange(1, len(df_init) + 1)
     df_init.index.name = "Row"
@@ -110,7 +110,7 @@ with btn_col1:
         if uploaded_file is not None:
             if uploaded_file.name.endswith(".csv"):
                 temp_df = pd.read_csv(uploaded_file)
-                st.session_state.loaded_settings = {} 
+                st.session_state.loaded_settings = {}
             else:
                 xls = pd.ExcelFile(uploaded_file)
                 temp_df = pd.read_excel(xls, sheet_name=xls.sheet_names[0])
@@ -121,18 +121,20 @@ with btn_col1:
                         st.session_state.loaded_settings = settings_dict
                         if "spec_table" in settings_dict:
                             st.session_state.loaded_specs = pd.DataFrame(settings_dict["spec_table"])
-                    except Exception as e:
+                    except Exception:
                         st.warning("ไม่สามารถโหลดไฟล์ตั้งค่าได้ (Settings เสียหาย)")
                         st.session_state.loaded_settings = {}
                 else:
                     st.session_state.loaded_settings = {}
+            if "Row" in temp_df.columns:
+                temp_df = temp_df.drop(columns=["Row"])
             temp_df.index = np.arange(1, len(temp_df) + 1)
             temp_df.index.name = "Row"
             st.session_state.df = temp_df
             st.session_state.editor_ver += 1
 with btn_col2:
     if st.button("🧹 ล้างตาราง", use_container_width=True):
-        empty_df = pd.DataFrame({"B1_0.3282 ± 0.0015": [np.nan]*10, "Month": [""]*10, "INV": [""]*10, "Cavity": [1]*10})
+        empty_df = pd.DataFrame({"B1_0.3282 ± 0.0015": [np.nan]*10, "Cav": [1]*10, "Month": [""]*10, "INV": [""]*10})
         empty_df.index = np.arange(1, len(empty_df) + 1)
         empty_df.index.name = "Row"
         st.session_state.df = empty_df
@@ -174,7 +176,7 @@ if app_mode == "🛠️ FA prepare":
     num_cols = [c for c in all_cols if str(c).strip().lower() not in NON_MEASUREMENT_NAMES]
     if not num_cols: num_cols = all_cols
 
-    group_col = st.sidebar.selectbox("แบ่งกลุ่มตาม (Group by):", ["ไม่แยกกลุ่ม"] + all_cols, index=all_cols.index("Cavity") + 1 if "Cavity" in all_cols else 0)
+    group_col = st.sidebar.selectbox("แบ่งกลุ่มตาม (Group by):", ["ไม่แยกกลุ่ม"] + all_cols, index=all_cols.index("Cavity") + 1 if "Cavity" in all_cols else (all_cols.index("Cav") + 1 if "Cav" in all_cols else 0))
     cavity_filter = "ทั้งหมด (Combined)"
     if group_col != "ไม่แยกกลุ่ม" and group_col in edited_df.columns:
         unique_cavities = ["ทั้งหมด (Combined)"] + list(edited_df[group_col].dropna().unique())
@@ -537,7 +539,7 @@ if app_mode == "🛠️ FA prepare":
             st.download_button("⬇️ ดาวน์โหลดกราฟทั้งหมด (.zip)", data=st.session_state.fa_export_zip, file_name="fa_charts.zip", mime="application/zip", use_container_width=True)
 
 # ##############################################################################
-# โหมดที่ 2: 📦 Normal Boxplot
+# โหมดที่ 2: 📦 Normal Boxplot (Minitab Authentic Layout)
 # ##############################################################################
 else:
     st.sidebar.header("📦 ตั้งค่า Normal Boxplot")
@@ -573,12 +575,12 @@ else:
     group_vars = []
     if "With Groups" in boxplot_type:
         cat_candidates = [c for c in all_cols if c not in y_vars] + [c for c in y_vars]
-        default_grps = ls.get("group_vars", [c for c in all_cols if str(c).strip().lower() in {"cav", "cavity", "month", "date", "con", "condition", "mold"} and c not in y_vars])
+        default_grps = ls.get("group_vars", [c for c in all_cols if str(c).strip().lower() in {"cav", "cavity", "month", "date", "con", "condition", "mold", "inv"} and c not in y_vars])
         if not default_grps and len(cat_candidates) > 0: default_grps = cat_candidates[:1]
         group_vars = st.sidebar.multiselect(
             "3. Categorical variables for grouping (เรียงลำดับ นอกสุด -> ในสุด):",
             cat_candidates, default=[g for g in default_grps if g in cat_candidates][:4], max_selections=4,
-            help="ลำดับแรกจะอยู่ชั้นนอกสุด (ด้านล่างสุด) ลำดับสุดท้ายจะอยู่ติดแกน X"
+            help="ลำดับแรกจะอยู่ชั้นนอกสุด (เช่น Cav -> Month -> INV) ลำดับสุดท้ายจะอยู่ติดแกน X"
         )
 
     custom_orders = {}
@@ -591,6 +593,8 @@ else:
                 auto_sorted = smart_sort_list(raw_unique)
                 def_val = saved_orders.get(gv, auto_sorted)
                 def_val = [v for v in def_val if v in auto_sorted]
+                if not def_val:
+                    def_val = auto_sorted
                 sel_order = st.multiselect(f"ลำดับของ `{gv}` (ซ้าย -> ขวา):", options=auto_sorted, default=def_val, key=f"order_{gv}_{st.session_state.editor_ver}")
                 custom_orders[gv] = sel_order if sel_order else auto_sorted
 
@@ -611,18 +615,20 @@ else:
         row_range = st.slider("เลือกช่วงแถว (Row #):", 1, max_r, tuple(saved_range))
         exclude_rows_str = st.text_input("ยกเว้นแถวที่ระบุ (เช่น 2, 5, 8-12):", value=ls.get("exclude_rows_str", ""))
 
-    with st.sidebar.expander("🎨 7. ตกแต่งสี & จุด Mean", expanded=False):
+    with st.sidebar.expander("🎨 7. ตกแต่งสี & รูปแบบ Minitab", expanded=False):
         c_col1, c_col2 = st.columns(2)
-        with c_col1: nb_fill_hex = st.color_picker("สีกล่องหลัก", ls.get("nb_fill_hex", "#72A0E5"), key="nb_fill2")
-        with c_col2: nb_line_hex = st.color_picker("สีเส้นขอบ", ls.get("nb_line_hex", "#333333"), key="nb_line2")
+        with c_col1: nb_fill_hex = st.color_picker("สีกล่องหลัก", ls.get("nb_fill_hex", "#3DB7E4"), key="nb_fill2")
+        with c_col2: nb_line_hex = st.color_picker("สีเส้นขอบ", ls.get("nb_line_hex", "#4A5568"), key="nb_line2")
         
         saved_color_col = ls.get("color_by_col", "สีเดียวกันทั้งหมด")
-        color_by_col = st.selectbox("แยกสีกล่องตามกลุ่ม (Color by):", ["สีเดียวกันทั้งหมด"] + group_vars, index=(["สีเดียวกันทั้งหมด"] + group_vars).index(saved_color_col) if saved_color_col in (["สีเดียวกันทั้งหมด"] + group_vars) else 0)
-        show_mean_symbol = st.checkbox("แสดงจุดค่าเฉลี่ย (Mean Symbol ⊕) และเส้นเชื่อม", value=ls.get("show_mean_symbol", True))
+        color_by_col = st.selectbox("แยกสีกล่องตามกลุ่ม (Legend):", ["สีเดียวกันทั้งหมด"] + group_vars, index=(["สีเดียวกันทั้งหมด"] + group_vars).index(saved_color_col) if saved_color_col in (["สีเดียวกันทั้งหมด"] + group_vars) else 0)
+        show_mean_symbol = st.checkbox("แสดงจุดค่าเฉลี่ย (Mean Symbol ⊕)", value=ls.get("show_mean_symbol", False))
+        show_mean_line = st.checkbox("ลากเส้นเชื่อมจุดค่าเฉลี่ย (Connect Line)", value=ls.get("show_mean_line", False))
         show_ind_points = st.checkbox("แสดงจุดข้อมูลทั้งหมด (Individual Points)", value=ls.get("show_ind_points", False))
         show_spec_nb = st.checkbox("เปิดใช้เส้น Spec บนกราฟ Boxplot", value=ls.get("show_spec_nb", True))
-        nb_box_width = st.slider("ความอ้วนของกล่อง", 0.15, 0.85, ls.get("nb_box_width", 0.50), 0.05, key="nb_bw2")
-        nb_chart_h = st.slider("ความสูงของกราฟ (px)", 360, 800, ls.get("nb_chart_h", 480), 20, key="nb_ch2")
+        cluster_gap = st.slider("ระยะเว้นวรรคระหว่างกลุ่มเดือน/กลุ่มย่อย", 0.0, 1.2, ls.get("cluster_gap", 0.45), 0.05)
+        nb_box_width = st.slider("ความอ้วนของกล่อง", 0.15, 0.85, ls.get("nb_box_width", 0.52), 0.05, key="nb_bw2")
+        nb_chart_h = st.slider("ความสูงของกราฟ (px)", 380, 850, ls.get("nb_chart_h", 520), 20, key="nb_ch2")
 
     def parse_excluded_rows(text_str):
         ex = set()
@@ -646,11 +652,11 @@ else:
         if gv in work_df.columns and allowed_order:
             work_df = work_df[work_df[gv].astype(str).isin(allowed_order)]
 
-    PALETTE = ["#43B3D9", "#F4A261", "#2A9D8F", "#E76F51", "#9B5DE5", "#E9C46A", "#00BBF9", "#00F5D4"]
+    PALETTE = ["#3DB7E4", "#72A0E5", "#F4A261", "#2A9D8F", "#E76F51", "#9B5DE5", "#E9C46A", "#00BBF9"]
 
     # --- ส่วนกำหนดเส้น Spec แบบ Custom ---
-    with st.expander("📏 8. กำหนดเส้น Spec แต่ละกราฟ (เพิ่มเส้นแบบ Minitab)", expanded=True):
-        st.caption("พิมพ์ค่า Spec ที่ต้องการให้แสดงบนกราฟ หากช่องไหนปล่อยว่าง (NaN) เส้นนั้นจะไม่แสดง (ดึงค่าเริ่มต้นอัตโนมัติจากชื่อพอยต์)")
+    with st.expander("📏 8. กำหนดเส้น Spec แต่ละกราฟ (เพิ่มเส้นแบบ Minitab)", expanded=False):
+        st.caption("พิมพ์ค่า Spec ที่ต้องการให้แสดงบนกราฟ หากช่องไหนปล่อยว่าง (None) เส้นนั้นจะไม่แสดง (ดึงค่าเริ่มต้นอัตโนมัติจากชื่อพอยต์)")
         
         spec_records = []
         if "loaded_specs" in st.session_state and not st.session_state.loaded_specs.empty:
@@ -703,8 +709,10 @@ else:
                 "nb_line_hex": nb_line_hex,
                 "color_by_col": color_by_col,
                 "show_mean_symbol": show_mean_symbol,
+                "show_mean_line": show_mean_line,
                 "show_ind_points": show_ind_points,
                 "show_spec_nb": show_spec_nb,
+                "cluster_gap": cluster_gap,
                 "nb_box_width": nb_box_width,
                 "nb_chart_h": nb_chart_h,
                 "spec_table": edited_specs.to_dict(orient="records") if 'edited_specs' in locals() and edited_specs is not None else []
@@ -714,6 +722,9 @@ else:
         
     st.sidebar.download_button(label="💾 เซฟข้อมูลและตั้งค่า (.xlsx)", data=to_excel_nb(edited_df), file_name="adjusted_data_NB.xlsx", use_container_width=True)
 
+    # ==========================================================================
+    # ฟังก์ชันวาดกราฟ Normal Boxplot สไตล์ Minitab แท้ 100% (ไม่ซ้อนทับ ไม่ตกขอบ)
+    # ==========================================================================
     def build_minitab_normal_boxplot(df_sub, y_list, grp_list, title_suffix=""):
         records = []
         for y_col in y_list:
@@ -749,23 +760,41 @@ else:
         unique_combos_df = unique_combos_df.sort_values(by=sort_key_cols).drop(columns=sort_key_cols).reset_index(drop=True)
         combos = [tuple(r) for r in unique_combos_df.to_numpy()]
         n_positions = len(combos)
+        n_levels = len(hierarchy_cols)
+
+        # คำนวณพิกัดแกน X แบบเว้นระยะห่างระหว่างกลุ่ม (Cluster Spacing เหมือน Minitab)
+        x_coords = []
+        cur_x = 0.0
+        for i, c in enumerate(combos):
+            if i > 0:
+                if n_levels > 1 and c[:-1] != combos[i - 1][:-1]:
+                    cur_x += 1.0 + cluster_gap
+                else:
+                    cur_x += 1.0
+            x_coords.append(cur_x)
 
         fig = go.Figure()
 
-        if color_by_col == "สีเดียวกันทั้งหมด": color_keys = ["All"]
-        elif color_by_col in long_df.columns: color_keys = custom_orders.get(color_by_col, list(dict.fromkeys(long_df[color_by_col].tolist())))
-        else: color_keys = ["All"]
+        if color_by_col == "สีเดียวกันทั้งหมด":
+            color_keys = ["All"]
+        elif color_by_col in long_df.columns:
+            color_keys = custom_orders.get(color_by_col, list(dict.fromkeys(long_df[color_by_col].tolist())))
+        else:
+            color_keys = ["All"]
 
         color_map = {}
         for i, ck in enumerate(color_keys):
-            color_map[str(ck)] = hex_to_rgba(nb_fill_hex, 0.85) if len(color_keys) == 1 else hex_to_rgba(PALETTE[i % len(PALETTE)], 0.85)
+            color_map[str(ck)] = hex_to_rgba(nb_fill_hex, 0.90) if len(color_keys) == 1 else hex_to_rgba(PALETTE[i % len(PALETTE)], 0.90)
 
         mean_x, mean_y = [], []
         summary_rows = []
+        shown_legends = set()
 
         for pos_idx, combo in enumerate(combos):
+            x_pos = x_coords[pos_idx]
             mask = pd.Series(True, index=long_df.index)
-            for col_h, val_h in zip(hierarchy_cols, combo): mask &= (long_df[col_h] == val_h)
+            for col_h, val_h in zip(hierarchy_cols, combo):
+                mask &= (long_df[col_h] == val_h)
             sub = long_df[mask]
             if sub.empty: continue
 
@@ -773,21 +802,58 @@ else:
             q1, med, q3 = np.percentile(vals, [25, 50, 75])
             iqr = q3 - q1
             mean_v, sd_v = float(np.mean(vals)), float(np.std(vals, ddof=1)) if len(vals) > 1 else 0.0
-            mean_x.append(pos_idx); mean_y.append(mean_v)
+            mean_x.append(x_pos)
+            mean_y.append(mean_v)
 
             grp_label = " | ".join(f"{h}={v}" for h, v in zip(hierarchy_cols, combo))
-            summary_rows.append({"Point": y_list[0] if len(y_list) == 1 else sub["Y_Name"].iloc[0], "Group": grp_label, "N": len(vals), "Mean": round(mean_v, 5), "StDev": round(sd_v, 6), "Min": round(float(np.min(vals)), 5), "Q1": round(float(q1), 5), "Median": round(float(med), 5), "Q3": round(float(q3), 5), "Max": round(float(np.max(vals)), 5), "IQR": round(float(iqr), 5)})
+            summary_rows.append({
+                "Point": y_list[0] if len(y_list) == 1 else sub["Y_Name"].iloc[0],
+                "Group": grp_label, "N": len(vals), "Mean": round(mean_v, 5), "StDev": round(sd_v, 6),
+                "Min": round(float(np.min(vals)), 5), "Q1": round(float(q1), 5),
+                "Median": round(float(med), 5), "Q3": round(float(q3), 5),
+                "Max": round(float(np.max(vals)), 5), "IQR": round(float(iqr), 5)
+            })
 
             ck = "All" if color_by_col == "สีเดียวกันทั้งหมด" else str(sub[color_by_col].iloc[0])
+            show_leg = (color_by_col != "สีเดียวกันทั้งหมด") and (ck not in shown_legends)
+            if show_leg:
+                shown_legends.add(ck)
+
             hover_str = f"<b>Row #: %{{customdata}}</b><br>Group: {grp_label}<br>Value: %{{y:.5f}}<extra></extra>"
 
-            fig.add_trace(go.Box(x=[pos_idx]*len(sub), y=sub["Value"], name=str(ck), legendgroup=str(ck), showlegend=False if color_by_col == "สีเดียวกันทั้งหมด" else True, width=nb_box_width, boxpoints="all" if show_ind_points else "outliers", jitter=0.25 if show_ind_points else 0, pointpos=0, customdata=sub["Row_ID"], hovertemplate=hover_str, fillcolor=color_map.get(ck, hex_to_rgba(nb_fill_hex, 0.85)), line=dict(color=nb_line_hex, width=1.2), marker=dict(color="#1F3E7A" if show_ind_points else "red", size=6 if show_ind_points else 7, symbol="circle" if show_ind_points else "cross")))
+            fig.add_trace(go.Box(
+                x=[x_pos] * len(sub),
+                y=sub["Value"],
+                name=str(ck),
+                legendgroup=str(ck),
+                showlegend=show_leg,
+                width=nb_box_width,
+                boxpoints="all" if show_ind_points else "outliers",
+                jitter=0.25 if show_ind_points else 0,
+                pointpos=0,
+                customdata=sub["Row_ID"],
+                hovertemplate=hover_str,
+                fillcolor=color_map.get(ck, hex_to_rgba(nb_fill_hex, 0.90)),
+                line=dict(color=nb_line_hex, width=1.2),
+                marker=dict(
+                    color="#1F3E7A" if show_ind_points else "#B22222",
+                    size=5 if show_ind_points else 6,
+                    symbol="circle" if show_ind_points else "asterisk"
+                )
+            ))
 
         if show_mean_symbol and mean_x:
-            fig.add_trace(go.Scatter(x=mean_x, y=mean_y, mode="lines+markers" if len(mean_x) > 1 else "markers", name="Mean", line=dict(color="#1F3E7A", width=1.2, dash="dot"), marker=dict(symbol="circle-cross", size=8, color="white", line=dict(color="#1F3E7A", width=1.5)), hovertemplate="<b>Mean</b>: %{y:.5f}<extra></extra>", showlegend=False))
+            mode_str = "lines+markers" if (show_mean_line and len(mean_x) > 1) else "markers"
+            fig.add_trace(go.Scatter(
+                x=mean_x, y=mean_y, mode=mode_str, name="Mean",
+                line=dict(color="#2B4C7E", width=1.1, dash="dot"),
+                marker=dict(symbol="circle-cross", size=8, color="white", line=dict(color="#2B4C7E", width=1.5)),
+                hovertemplate="<b>Mean</b>: %{y:.5f}<extra></extra>", showlegend=False
+            ))
 
+        # --- วาดเส้น Spec แบบ Minitab ---
         y_min, y_max = float(long_df["Value"].min()), float(long_df["Value"].max())
-        spec_margin_r = 50
+        spec_margin_r = 45
         
         current_y_name = y_list[0] if len(y_list) == 1 else None
         if show_spec_nb and current_y_name and edited_specs is not None:
@@ -795,11 +861,11 @@ else:
             if not spec_row.empty:
                 specs_dict = spec_row.iloc[0].to_dict()
                 lines_cfg = [
-                    ("USL Outer (แดง)", "#D32F2F"),
-                    ("USL Inner (แดง)", "#D32F2F"),
-                    ("Target (เขียว)", "#388E3C"),
-                    ("LSL Inner (แดง)", "#D32F2F"),
-                    ("LSL Outer (แดง)", "#D32F2F")
+                    ("USL Outer (แดง)", "#B22222"),
+                    ("USL Inner (แดง)", "#B22222"),
+                    ("Target (เขียว)", "#2E8B57"),
+                    ("LSL Inner (แดง)", "#B22222"),
+                    ("LSL Outer (แดง)", "#B22222")
                 ]
                 has_spec = False
                 for key, color in lines_cfg:
@@ -807,71 +873,132 @@ else:
                     if pd.notna(val) and val != "":
                         val = float(val)
                         has_spec = True
-                        fig.add_hline(y=val, line_dash="dash", line_color=color, line_width=1.5)
+                        fig.add_hline(y=val, line_dash="4px,3px", line_color=color, line_width=1.3)
                         fig.add_annotation(
-                            x=1.01, y=val, xref="paper", yref="y",
-                            text=f"{val:.4f}", showarrow=False,
+                            x=1.012, y=val, xref="paper", yref="y",
+                            text=f"<b>{val:.4f}</b>", showarrow=False,
                             xanchor="left", yanchor="middle",
                             font=dict(color=color, size=13, family="Arial, sans-serif")
                         )
                         y_min = min(y_min, val)
                         y_max = max(y_max, val)
                 if has_spec:
-                    spec_margin_r = 95 
+                    spec_margin_r = 85
 
         if color_by_col != "สีเดียวกันทั้งหมด":
-            spec_margin_r += 90
+            spec_margin_r += 95
 
-        n_levels = len(hierarchy_cols)
+        # --- จัดวางเลเบลแกน X หลายชั้นแบบ Minitab แท้ (คำนวณพิกเซลกันชนกัน 100%) ---
         innermost_ticks = [str(c[-1]) for c in combos]
-        
-        # คำนวณระยะขอบล่างแบบยืดหยุ่น ป้องกันชื่อตกขอบ
-        base_y_shift = 0.18
-        level_y_step = 0.09
-        max_y_shift = base_y_shift + max(0, n_levels - 1) * level_y_step
-        bottom_margin = int(nb_chart_h * max_y_shift) + 40
+        max_inner_len = max([len(t) for t in innermost_ticks] + [1])
 
-        for lvl_idx in range(n_levels):
-            col_label = hierarchy_cols[lvl_idx]
-            if lvl_idx == n_levels - 1: 
-                y_pos_paper = -base_y_shift 
-            else:
-                depth_from_inner = (n_levels - 1) - lvl_idx
-                y_pos_paper = -(base_y_shift + depth_from_inner * level_y_step)
+        # ถ้ามีแค่ 1 ชั้นและชื่อสั้น (เช่น 1, 2) ให้ตั้งตรง 0 องศาเหมือน Minitab
+        inner_angle = -45 if (n_levels > 1 or max_inner_len > 4 or n_positions > 6) else 0
 
-            fig.add_annotation(x=-0.02, y=y_pos_paper, xref="paper", yref="paper", text=f"<b>{'Variable' if col_label == 'Y_Name' else col_label}</b>", showarrow=False, xanchor="right", yanchor="middle", font=dict(size=12, color="#222222", family="Arial, sans-serif"))
+        # คำนวณความสูงของตัวหนังสือชั้นในสุด (หน่วยพิกเซล) เพื่อไม่ให้ชั้นถัดไปมาทับ
+        if inner_angle == -45:
+            inner_label_px = max(36, int(max_inner_len * 5.8) + 14)
+        else:
+            inner_label_px = 26
 
-            if lvl_idx < n_levels - 1:
-                run_start = 0
-                for i in range(1, n_positions + 1):
-                    is_end = (i == n_positions) or (combos[i][:lvl_idx + 1] != combos[run_start][:lvl_idx + 1])
-                    if is_end:
-                        run_end = i - 1
-                        mid_x = (run_start + run_end) / 2.0
-                        val_text = str(combos[run_start][lvl_idx])
-                        fig.add_annotation(x=mid_x, y=y_pos_paper, xref="x", yref="paper", text=f"<b>{val_text}</b>", showarrow=False, xanchor="center", yanchor="middle", font=dict(size=12, color="#222222", family="Arial, sans-serif"))
-                        if i < n_positions:
-                            fig.add_vline(x=run_end + 0.5, line_dash="dot" if lvl_idx > 0 else "dash", line_color="#BBBBBB" if lvl_idx > 0 else "#888888", line_width=1.0 if lvl_idx > 0 else 1.3)
-                        run_start = i
+        outer_step_px = 38
+        total_bottom_px = inner_label_px + (n_levels - 1) * outer_step_px + 28
+        plot_h_px = max(200, nb_chart_h - 52 - total_bottom_px)
+
+        if n_levels == 1:
+            # กรณีมีแค่ชั้นเดียว (เช่น Condition 1, 2) วางชื่อแกนไว้ตรงกลางด้านล่าง
+            col_label = hierarchy_cols[0]
+            disp_name = "" if col_label == "Y_Name" else col_label
+            if disp_name:
+                y_title_paper = -(inner_label_px + 12) / plot_h_px
+                fig.add_annotation(
+                    x=0.5, y=y_title_paper, xref="paper", yref="paper",
+                    text=f"<b>{disp_name}</b>", showarrow=False,
+                    xanchor="center", yanchor="top",
+                    font=dict(size=13, color="#222222", family="Arial, sans-serif")
+                )
+        else:
+            # กรณีมีหลายชั้น (เช่น Cav -> Month -> INV) เรียงซ้อนเหมือน Minitab
+            for lvl_idx in range(n_levels):
+                col_label = hierarchy_cols[lvl_idx]
+                disp_name = "Variable" if col_label == "Y_Name" else col_label
+
+                if lvl_idx == n_levels - 1:
+                    # ตำแหน่งชื่อแถวชั้นในสุด (เช่น INV / Con) อยู่ระดับเดียวกับกึ่งกลางตัวหนังสือชั้นในสุด
+                    y_px_down = inner_label_px * 0.55
+                else:
+                    depth_from_inner = (n_levels - 1) - lvl_idx
+                    y_px_down = inner_label_px + (depth_from_inner - 1) * outer_step_px + 18
+
+                y_pos_paper = -y_px_down / plot_h_px
+
+                # ชื่อคอลัมน์กลุ่มทางซ้ายมือ (เช่น INV, Month, Cav)
+                fig.add_annotation(
+                    x=-0.02, y=y_pos_paper, xref="paper", yref="paper",
+                    text=f"<b>{disp_name}</b>", showarrow=False,
+                    xanchor="right", yanchor="middle",
+                    font=dict(size=13, color="#222222", family="Arial, sans-serif")
+                )
+
+                # วาดค่าของกลุ่มชั้นนอก (เช่น June, July, Aug, 2) พร้อมขีด Tick และเอียง -45 องศา
+                if lvl_idx < n_levels - 1:
+                    run_start = 0
+                    for i in range(1, n_positions + 1):
+                        is_end = (i == n_positions) or (combos[i][:lvl_idx + 1] != combos[run_start][:lvl_idx + 1])
+                        if is_end:
+                            run_end = i - 1
+                            mid_x = (x_coords[run_start] + x_coords[run_end]) / 2.0
+                            val_text = str(combos[run_start][lvl_idx])
+
+                            # ขีด Tick เล็กๆ เหนือชื่อกลุ่มชั้นนอกเหมือน Minitab
+                            tick_top_paper = -(y_px_down - 13) / plot_h_px
+                            tick_bot_paper = -(y_px_down - 8) / plot_h_px
+                            fig.add_shape(
+                                type="line", xref="x", yref="paper",
+                                x0=mid_x, x1=mid_x, y0=tick_top_paper, y1=tick_bot_paper,
+                                line=dict(color="#666666", width=1)
+                            )
+
+                            fig.add_annotation(
+                                x=mid_x, y=y_pos_paper, xref="x", yref="paper",
+                                text=f"<b>{val_text}</b>", showarrow=False,
+                                textangle=-45, xanchor="center", yanchor="middle",
+                                font=dict(size=12, color="#222222", family="Arial, sans-serif")
+                            )
+                            run_start = i
 
         span = y_max - y_min if y_max > y_min else 0.003
         chart_title = f"Boxplot of {', '.join(y_list)}" + (f" ({title_suffix})" if title_suffix else "")
+        max_x_coord = x_coords[-1] if x_coords else 0.0
 
         fig.update_layout(
-            title=dict(text=f"<b>{chart_title}</b>", x=0.5, xanchor="center", font=dict(family="Arial, sans-serif")),
-            yaxis_title=y_list[0] if len(y_list) == 1 else "Data",
-            yaxis=dict(range=[y_min - span * 0.1, y_max + span * 0.1], tickformat=".4f", gridcolor="#EEEEEE", zeroline=False, tickfont=dict(family="Arial, sans-serif")),
-            xaxis=dict(
-                tickmode="array", tickvals=list(range(n_positions)), ticktext=innermost_ticks,
-                range=[-0.6, max(0.6, n_positions - 0.4)], gridcolor="#EEEEEE",
-                tickangle=-45, tickfont=dict(family="Arial, sans-serif")
+            title=dict(text=f"<b>{chart_title}</b>", x=0.5, xanchor="center", font=dict(size=18, color="#222222", family="Arial, sans-serif")),
+            yaxis_title=dict(text=y_list[0] if len(y_list) == 1 else "Data", font=dict(size=14, color="#333333", family="Arial, sans-serif")),
+            yaxis=dict(
+                range=[y_min - span * 0.10, y_max + span * 0.10],
+                tickformat=".4f", gridcolor="#E5E5E5", zeroline=False,
+                ticks="outside", ticklen=4, tickcolor="#888888",
+                tickfont=dict(size=12, color="#222222", family="Arial, sans-serif")
             ),
-            plot_bgcolor="white", paper_bgcolor="#FAFAFA",
-            height=nb_chart_h, margin=dict(l=90, r=spec_margin_r, t=55, b=bottom_margin),
-            legend=dict(title=color_by_col if color_by_col != "สีเดียวกันทั้งหมด" else "", orientation="v", y=1, x=1.05, xanchor="left", yanchor="top", font=dict(family="Arial, sans-serif"))
+            xaxis=dict(
+                tickmode="array", tickvals=x_coords, ticktext=innermost_ticks,
+                range=[-0.65, max(0.65, max_x_coord + 0.65)],
+                showgrid=False, ticks="outside", ticklen=4, tickcolor="#888888",
+                tickangle=inner_angle,
+                tickfont=dict(size=12, color="#222222", family="Arial, sans-serif")
+            ),
+            plot_bgcolor="white", paper_bgcolor="#F2F4F7",
+            height=nb_chart_h, margin=dict(l=85, r=spec_margin_r, t=52, b=total_bottom_px),
+            legend=dict(
+                title=dict(text=f"<b>{color_by_col}</b>" if color_by_col != "สีเดียวกันทั้งหมด" else ""),
+                orientation="v", y=1, x=1.08 if show_spec_nb else 1.02,
+                xanchor="left", yanchor="top",
+                bgcolor="white", bordercolor="#CCCCCC", borderwidth=1,
+                font=dict(size=12, family="Arial, sans-serif")
+            )
         )
-        fig.update_xaxes(showline=True, linewidth=1, linecolor="#AAAAAA", mirror=True)
-        fig.update_yaxes(showline=True, linewidth=1, linecolor="#AAAAAA", mirror=True)
+        fig.update_xaxes(showline=True, linewidth=1, linecolor="#888888", mirror=True)
+        fig.update_yaxes(showline=True, linewidth=1, linecolor="#888888", mirror=True)
         return fig, pd.DataFrame(summary_rows)
 
     generated_charts = []
@@ -905,7 +1032,7 @@ else:
             st.warning("ไม่มีข้อมูลตัวเลขในคอลัมน์ที่เลือกสำหรับการวาด Boxplot")
         else:
             if len(generated_charts) == 1 and panel_cols_count == 1:
-                c_l, c_m, c_r = st.columns([0.2, 3.6, 0.2])
+                c_l, c_m, c_r = st.columns([0.15, 3.7, 0.15])
                 with c_m: st.plotly_chart(generated_charts[0][1], use_container_width=True)
             else:
                 cols_ui = st.columns(panel_cols_count)
