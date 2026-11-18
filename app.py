@@ -201,7 +201,6 @@ if app_mode == "🛠️ FA prepare":
         box_gap_val = st.slider("ระยะห่างระหว่างกล่อง", 0.3, 2.5, ls.get("box_gap_val", 1.0), 0.1)
         chart_height = st.slider("ความสูงของกราฟ (px)", 380, 700, ls.get("nb_chart_h", 480), 20)
 
-    # --- ฟังก์ชันเซฟ Excel (FA prepare) ---
     def to_excel_fa(df):
         output = BytesIO()
         with pd.ExcelWriter(output, engine='xlsxwriter') as writer:
@@ -825,14 +824,20 @@ else:
 
         n_levels = len(hierarchy_cols)
         innermost_ticks = [str(c[-1]) for c in combos]
-        bottom_margin = 55 + max(0, n_levels - 1) * 35
+        
+        # คำนวณระยะขอบล่างแบบยืดหยุ่น ป้องกันชื่อตกขอบ
+        base_y_shift = 0.18
+        level_y_step = 0.09
+        max_y_shift = base_y_shift + max(0, n_levels - 1) * level_y_step
+        bottom_margin = int(nb_chart_h * max_y_shift) + 40
 
         for lvl_idx in range(n_levels):
             col_label = hierarchy_cols[lvl_idx]
-            if lvl_idx == n_levels - 1: y_pos_paper = -0.15 
+            if lvl_idx == n_levels - 1: 
+                y_pos_paper = -base_y_shift 
             else:
                 depth_from_inner = (n_levels - 1) - lvl_idx
-                y_pos_paper = -0.15 - depth_from_inner * 0.085
+                y_pos_paper = -(base_y_shift + depth_from_inner * level_y_step)
 
             fig.add_annotation(x=-0.02, y=y_pos_paper, xref="paper", yref="paper", text=f"<b>{'Variable' if col_label == 'Y_Name' else col_label}</b>", showarrow=False, xanchor="right", yanchor="middle", font=dict(size=12, color="#222222", family="Arial, sans-serif"))
 
