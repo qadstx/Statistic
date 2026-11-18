@@ -503,7 +503,11 @@ if app_mode == "🛠️ FA prepare":
                         cav_tag = "" if cavity_filter == "ทั้งหมด (Combined)" else f"_Cavity{cavity_filter}"
                         files = {t: [] for t in export_types}
                         for i, col_name in enumerate(export_cols, 1):
-                            c_lsl, c_target, c_usl = lsl_input, target_input, usl_input if "Show ทีละกราฟ" in view_mode and col_name == selected_col else parse_spec_from_col(col_name)
+                            if "Show ทีละกราฟ" in view_mode and col_name == selected_col:
+                                c_lsl, c_target, c_usl = lsl_input, target_input, usl_input 
+                            else:
+                                c_lsl, c_target, c_usl = parse_spec_from_col(col_name)
+                                
                             safe = re.sub(r"[^0-9A-Za-z._-]+", "_", str(col_name)).strip("_")
                             base = f"{i:02d}_{safe}{cav_tag}"
                             if "Boxplot" in export_types:
@@ -597,7 +601,9 @@ else:
         else:
             multi_y_display = "📄 แยกเป็นกราฟคนละใบ (B1, B2... แยกกัน)"
         panel_cols_count = st.radio("จำนวนคอลัมน์ที่เรียงกราฟหน้าเว็บ:", [1, 2], index=ls.get("panel_cols_count_idx", 1 if len(y_vars) > 1 else 0), horizontal=True)
-        split_by_col = st.selectbox("แยกกราฟเพิ่มตามคอลัมน์ (By variable):", ["ไม่แยกเพิ่ม"] + all_cols, index=all_cols.index(ls["split_by_col"]) + 1 if "split_by_col" in ls and ls["split_by_col"] in all_cols else 0)
+        
+        saved_split = ls.get("split_by_col", "ไม่แยกเพิ่ม")
+        split_by_col = st.selectbox("แยกกราฟเพิ่มตามคอลัมน์ (By variable):", ["ไม่แยกเพิ่ม"] + all_cols, index=(["ไม่แยกเพิ่ม"] + all_cols).index(saved_split) if saved_split in (["ไม่แยกเพิ่ม"] + all_cols) else 0)
 
     with st.sidebar.expander("🔍 6. Data Options (เลือกแถว)", expanded=False):
         max_r = max(1, len(edited_df))
@@ -676,7 +682,7 @@ else:
             },
             key=f"spec_editor_{len(y_vars)}_{st.session_state.editor_ver}"
         )
-        st.session_state.loaded_specs = edited_specs
+        st.session_state.loaded_specs = edited_specs 
 
     # --- ฟังก์ชันเซฟ Excel แบบรวม Settings (Normal Boxplot) ---
     def to_excel_nb(df):
@@ -781,7 +787,6 @@ else:
         if show_mean_symbol and mean_x:
             fig.add_trace(go.Scatter(x=mean_x, y=mean_y, mode="lines+markers" if len(mean_x) > 1 else "markers", name="Mean", line=dict(color="#1F3E7A", width=1.2, dash="dot"), marker=dict(symbol="circle-cross", size=8, color="white", line=dict(color="#1F3E7A", width=1.5)), hovertemplate="<b>Mean</b>: %{y:.5f}<extra></extra>", showlegend=False))
 
-        # --- วาดเส้น Spec แบบกำหนดเอง (ด้านขวาของกราฟ) ---
         y_min, y_max = float(long_df["Value"].min()), float(long_df["Value"].max())
         spec_margin_r = 50
         
