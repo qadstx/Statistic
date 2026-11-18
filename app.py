@@ -5,6 +5,7 @@ from scipy import stats
 from scipy.special import gammaln
 import plotly.graph_objects as go
 import re
+import json
 from io import BytesIO
 import zipfile
 
@@ -18,7 +19,6 @@ def hex_to_rgba(hex_color, opacity=0.85):
     r, g, b = tuple(int(hex_color[i:i+2], 16) for i in (0, 2, 4))
     return f"rgba({r}, {g}, {b}, {opacity})"
 
-# --- ฟังก์ชันดึงค่า Target / Tol จากชื่อคอลัมน์ เช่น B1_0.328 ± 0.0015 ---
 def parse_spec_from_col(col_name):
     match = re.search(r"(\d+\.\d+)\s*[±\+\-]\s*(\d+\.\d+)", str(col_name))
     if match:
@@ -28,10 +28,8 @@ def parse_spec_from_col(col_name):
     return 0.3265, 0.3280, 0.3295
 
 def fmt6(v):
-    """แสดง 6 significant digits แบบ Minitab (ตัดศูนย์ท้ายทิ้ง)"""
     return np.format_float_positional(float(v), precision=6, unique=False, fractional=False, trim='-')
 
-# --- ค่าคงที่ unbiasing ตาม Minitab ---
 def c4(n):
     return np.sqrt(2.0 / (n - 1)) * np.exp(gammaln(n / 2.0) - gammaln((n - 1) / 2.0))
 
@@ -48,7 +46,6 @@ def calc_within(values, subgroup_size=1):
     d = sum(len(g) - 1 for g in groups)
     return np.sqrt(ss / d) / c4(d + 1)
 
-# --- ฟังก์ชันเรียงลำดับอัจฉริยะ ---
 MONTH_ORDER = {
     "jan": 1, "january": 1, "ม.ค.": 1, "มกราคม": 1,
     "feb": 2, "february": 2, "ก.พ.": 2, "กุมภาพันธ์": 2,
@@ -80,23 +77,8 @@ def smart_sort_list(items):
     return sorted(items, key=smart_sort_key)
 
 # ==============================================================================
-# 0. เลือกโหมดแอปหลัก (App Mode Selector)
+# โหลดข้อมูลและการตั้งค่า
 # ==============================================================================
-st.sidebar.header("🧭 เลือกโหมดการทำงาน")
-app_mode = st.sidebar.radio(
-    "เลือกฟังก์ชัน:",
-    ["🛠️ FA prepare", "📦 Normal Boxplot"],
-    index=1,
-    label_visibility="collapsed"
-)
-st.sidebar.divider()
-
-# ==============================================================================
-# 1. ส่วนจัดการข้อมูล (Upload หรือ ตารางเปล่าให้กรอก - ใช้ร่วมกันทั้ง 2 โหมด)
-# ==============================================================================
-st.sidebar.header("📁 ข้อมูล (Data Input)")
-uploaded_file = st.sidebar.file_uploader("อัปโหลดไฟล์ Excel/CSV", type=["xlsx", "csv"], label_visibility="collapsed")
-
 if "df" not in st.session_state:
     np.random.seed(42)
     df_init = pd.DataFrame({
@@ -110,8 +92,18 @@ if "df" not in st.session_state:
     df_init.index.name = "Row"
     st.session_state.df = df_init
 
+# ตัวแปรสำหรับเก็บ Settings ที่โหลดจาก Excel กลับมา
+if "loaded_settings" not in st.session_state:
+    st.session_state.loaded_settings = {}
 if "editor_ver" not in st.session_state:
     st.session_state.editor_ver = 0
+
+st.sidebar.header("🧭 เลือกโหมดการทำงาน")
+app_mode = st.sidebar.radio("เลือกฟังก์ชัน:", ["🛠️ FA prepare", "📦 Normal Boxplot"], index=1, label_visibility="collapsed")
+st.sidebar.divider()
+
+st.sidebar.header("📁 ข้อมูล (Data Input)")
+uploaded_file = st.sidebar.file_uploader("อัปโหลดไฟล์ Excel/CSV", type=["xlsx", "csv"], label_visibility="collapsed")
 
 btn_col1, btn_col2 = st.sidebar.columns(2)
 with btn_col1:
@@ -119,28 +111,40 @@ with btn_col1:
         if uploaded_file is not None:
             if uploaded_file.name.endswith(".csv"):
                 temp_df = pd.read_csv(uploaded_file)
+                st.session_state.loaded_settings = {} # รีเซ็ตการตั้งค่าถ้าเป็นไฟล์ CSV ธรรมดา
             else:
-                temp_df = pd.read_excel(uploaded_file)
+                # อ่านไฟล์ Excel ทุกชีทเพื่อหาชีท Settings
+                xls = pd.ExcelFile(uploaded_file)
+                temp_df = pd.read_excel(xls, sheet_name=xls.sheet_names[0])
+                if "Settings" in xls.sheet_names:
+                    settings_df = pd.read_excel(xls, sheet_name="Settings")
+                    try:
+                        settings_dict = json.loads(settings_df.iloc[0]["Config_JSON"])
+                        st.session_state.loaded_settings = settings_dict
+                        if "spec_table" in settings_dict:
+                            st.session_state.loaded_specs = pd.DataFrame(settings_dict["spec_table"])
+                    except Exception as e:
+                        st.warning("ไม่สามารถโหลดไฟล์ตั้งค่าได้ (Settings เสียหาย)")
+                        st.session_state.loaded_settings = {}
+                else:
+                    st.session_state.loaded_settings = {}
             temp_df.index = np.arange(1, len(temp_df) + 1)
             temp_df.index.name = "Row"
             st.session_state.df = temp_df
             st.session_state.editor_ver += 1
 with btn_col2:
     if st.button("🧹 ล้างตาราง", use_container_width=True):
-        empty_df = pd.DataFrame({
-            "B1_0.3282 ± 0.0015": [np.nan]*10,
-            "Month": [""]*10,
-            "INV": [""]*10,
-            "Cavity": [1]*10
-        })
+        empty_df = pd.DataFrame({"B1_0.3282 ± 0.0015": [np.nan]*10, "Month": [""]*10, "INV": [""]*10, "Cavity": [1]*10})
         empty_df.index = np.arange(1, len(empty_df) + 1)
         empty_df.index.name = "Row"
         st.session_state.df = empty_df
+        st.session_state.loaded_settings = {}
+        if "loaded_specs" in st.session_state:
+            del st.session_state.loaded_specs
         st.session_state.editor_ver += 1
 
 st.session_state.df.index = np.arange(1, len(st.session_state.df) + 1)
 st.session_state.df.index.name = "Row"
-
 NON_MEASUREMENT_NAMES = {"cavity", "cav", "mold", "date", "month", "con", "condition", "lot", "machine", "shift", "operator", "group", "type", "inv"}
 
 with st.expander("📝 ตารางข้อมูล (คลิกแก้ตัวเลข / ก๊อปวางจาก Excel ได้ทันที)", expanded=True):
@@ -159,25 +163,16 @@ with st.expander("📝 ตารางข้อมูล (คลิกแก้�
     edited_df.index = np.arange(1, len(edited_df) + 1)
     edited_df.index.name = "Row"
 
-def to_excel(df):
-    output = BytesIO()
-    with pd.ExcelWriter(output, engine='xlsxwriter') as writer:
-        df.to_excel(writer, index=True, sheet_name='Adjusted_Data')
-    return output.getvalue()
-
-st.sidebar.download_button(
-    label="💾 เซฟข้อมูลที่แก้แล้ว (.xlsx)",
-    data=to_excel(edited_df),
-    file_name="adjusted_data.xlsx",
-    mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
-    use_container_width=True
-)
-
 st.sidebar.divider()
 
 # ##############################################################################
-# โหมดที่ 1: 🛠️ FA prepare (คงโค้ดและกราฟต้นฉบับเดิมของคุณไว้ 100%)
+# ดึงค่า Settings ที่เคยเซฟไว้มาใช้ (ถ้ามี)
 # ##############################################################################
+ls = st.session_state.loaded_settings
+
+# ==============================================================================
+# โหมดที่ 1: 🛠️ FA prepare (ยังเก็บการตั้งค่าแยกไว้เหมือนเดิม)
+# ==============================================================================
 if app_mode == "🛠️ FA prepare":
     st.sidebar.header("⚙️ ตั้งค่า (FA prepare)")
     view_mode = st.sidebar.radio("รูปแบบการแสดงผล:", ["🔍 Show ทีละกราฟ", "📜 Show ทั้งหมดทีเดียว"], horizontal=True, label_visibility="collapsed")
@@ -185,13 +180,13 @@ if app_mode == "🛠️ FA prepare":
     num_cols = [c for c in all_cols if str(c).strip().lower() not in NON_MEASUREMENT_NAMES]
     if not num_cols: num_cols = all_cols
 
-    group_col = st.sidebar.selectbox("แบ่งกลุ่มตาม (Group by):", ["ไม่แยกกลุ่ม"] + all_cols, index=all_cols.index("Cavity") + 1 if "Cavity" in all_cols else (all_cols.index("Cav") + 1 if "Cav" in all_cols else 0))
+    group_col = st.sidebar.selectbox("แบ่งกลุ่มตาม (Group by):", ["ไม่แยกกลุ่ม"] + all_cols, index=all_cols.index("Cavity") + 1 if "Cavity" in all_cols else 0)
     cavity_filter = "ทั้งหมด (Combined)"
     if group_col != "ไม่แยกกลุ่ม" and group_col in edited_df.columns:
         unique_cavities = ["ทั้งหมด (Combined)"] + list(edited_df[group_col].dropna().unique())
         cavity_filter = st.sidebar.selectbox("เลือกดูเฉพาะกลุ่ม:", unique_cavities)
 
-    subgroup_size = st.sidebar.number_input("Subgroup size", min_value=1, value=32, step=1)
+    subgroup_size = st.sidebar.number_input("Subgroup size", min_value=1, value=ls.get("subgroup_size", 32), step=1)
 
     if "Show ทีละกราฟ" in view_mode:
         selected_col = st.sidebar.selectbox("เลือกพอยต์ที่ต้องการวิเคราะห์:", num_cols)
@@ -206,11 +201,29 @@ if app_mode == "🛠️ FA prepare":
 
     with st.sidebar.expander("🎨 ตกแต่งกราฟ (เปลี่ยนสี/ขนาด)"):
         col_c1, col_c2 = st.columns(2)
-        with col_c1: box_fill_hex = st.color_picker("สีพื้น Boxplot", "#72A0E5")
-        with col_c2: box_line_hex = st.color_picker("สีเส้นขอบ", "#333333")
-        box_width_val = st.slider("ความอ้วนของกล่อง", 0.15, 0.70, 0.35, 0.05)
-        box_gap_val = st.slider("ระยะห่างระหว่างกล่อง", 0.3, 2.5, 1.0, 0.1)
-        chart_height = st.slider("ความสูงของกราฟ (px)", 380, 700, 480, 20)
+        with col_c1: box_fill_hex = st.color_picker("สีพื้น Boxplot", ls.get("nb_fill_hex", "#72A0E5"))
+        with col_c2: box_line_hex = st.color_picker("สีเส้นขอบ", ls.get("nb_line_hex", "#333333"))
+        box_width_val = st.slider("ความอ้วนของกล่อง", 0.15, 0.70, ls.get("nb_box_width", 0.35), 0.05)
+        box_gap_val = st.slider("ระยะห่างระหว่างกล่อง", 0.3, 2.5, ls.get("box_gap_val", 1.0), 0.1)
+        chart_height = st.slider("ความสูงของกราฟ (px)", 380, 700, ls.get("nb_chart_h", 480), 20)
+
+    # --- ฟังก์ชันเซฟ Excel แบบรวม Settings ---
+    def to_excel(df):
+        output = BytesIO()
+        with pd.ExcelWriter(output, engine='xlsxwriter') as writer:
+            df.to_excel(writer, index=True, sheet_name='Adjusted_Data')
+            settings_json = json.dumps({
+                "subgroup_size": subgroup_size,
+                "nb_fill_hex": box_fill_hex,
+                "nb_line_hex": box_line_hex,
+                "nb_box_width": box_width_val,
+                "box_gap_val": box_gap_val,
+                "nb_chart_h": chart_height
+            })
+            pd.DataFrame({"Config_JSON": [settings_json]}).to_excel(writer, index=False, sheet_name="Settings")
+        return output.getvalue()
+        
+    st.sidebar.download_button(label="💾 เซฟข้อมูลและตั่งค่า (.xlsx)", data=to_excel(edited_df), file_name="adjusted_data_with_settings.xlsx", use_container_width=True)
 
     def get_filtered_data(df_in, col_name, grp_col, cav_val):
         temp_df = df_in[[col_name] + ([grp_col] if grp_col != "ไม่แยกกลุ่ม" else [])].copy()
@@ -226,7 +239,6 @@ if app_mode == "🛠️ FA prepare":
         valid_df["Row_ID"] = valid_df.index
         valid_df[col_name] = pd.to_numeric(valid_df[col_name], errors='coerce')
         valid_df = valid_df.dropna(subset=[col_name])
-
         fig = go.Figure()
         fill_rgba = hex_to_rgba(box_fill_hex, 0.85)
         tick_pos, tick_txt = [], []
@@ -271,8 +283,7 @@ if app_mode == "🛠️ FA prepare":
         data = valid_df[col_name]
         n = len(data)
         if n == 0: return None, {}
-        mean = data.mean()
-        std_overall = data.std(ddof=1) if n > 1 else 0.0001
+        mean, std_overall = data.mean(), data.std(ddof=1) if n > 1 else 0.0001
         std_within = calc_within(data.values, subgroup_size)
         if not np.isfinite(std_within) or std_within <= 0: std_within = std_overall
 
@@ -333,7 +344,6 @@ if app_mode == "🛠️ FA prepare":
         _t(0.155, 0.838, "Process Data", "center")
         for yy, (lb, vv) in zip([0.812, 0.784, 0.758, 0.730, 0.702, 0.673, 0.646], [("LSL", fmt6(lsl)), ("Target", fmt6(target)), ("USL", fmt6(usl)), ("Sample Mean", fmt6(mean)), ("Sample N", f"{n}"), ("StDev(Overall)", fmt6(std_overall)), ("StDev(Within)", fmt6(std_within))]):
             _t(0.03, yy, lb); _t(0.152, yy, vv)
-
         fig.add_shape(type="line", xref="paper", yref="paper", x0=0.748, x1=0.800, y0=0.840, y1=0.840, line=dict(color="#8B1A1A", width=2))
         fig.add_shape(type="line", xref="paper", yref="paper", x0=0.748, x1=0.800, y0=0.812, y1=0.812, line=dict(color="#555555", width=2, dash="dash"))
         _t(0.809, 0.840, "Overall"); _t(0.809, 0.812, "Within")
@@ -357,8 +367,7 @@ if app_mode == "🛠️ FA prepare":
             yaxis=dict(domain=[0.359, PLOT_TOP], range=[0, y_max_val * 1.08], showticklabels=False, showgrid=True, gridcolor="#E6E6E6", zeroline=False, showline=True, linecolor="#888888", mirror=True, nticks=6),
             bargap=0, showlegend=False, plot_bgcolor="white", paper_bgcolor="#DDDDDD", height=720, margin=dict(l=0, r=0, t=0, b=0)
         )
-        metrics = {"N": n, "Mean": mean, "StDev(Overall)": std_overall, "StDev(Within)": std_within, "Cp": cp, "Cpk": min(cpl, cpu), "Pp": pp, "Ppk": min(ppl, ppu), "Cpm": cpm}
-        return fig, metrics
+        return fig, {"N": n, "Mean": mean, "StDev(Overall)": std_overall, "StDev(Within)": std_within, "Cp": cp, "Cpk": min(cpl, cpu), "Pp": pp, "Ppk": min(ppl, ppu), "Cpm": cpm}
 
     def diagnose_capability(data, lsl, target, usl, subgroup_size=1):
         x = np.asarray(data, dtype=float); n = len(x); mean = x.mean(); s = x.std(ddof=1); dx = np.diff(x); mr = np.abs(dx)
@@ -370,8 +379,7 @@ if app_mode == "🛠️ FA prepare":
                 ss = sum(((g - g.mean()) ** 2).sum() for g in groups)
                 d = sum(len(g) - 1 for g in groups)
                 sp = np.sqrt(ss / d)
-                cands[f"Pooled StDev (size={subgroup_size}) ไม่หาร c4"] = sp
-                cands[f"Pooled StDev (size={subgroup_size}) หาร c4(d+1)"] = sp / c4(d + 1)
+                cands[f"Pooled StDev (size={subgroup_size}) ไม่หาร c4"] = sp; cands[f"Pooled StDev (size={subgroup_size}) หาร c4(d+1)"] = sp / c4(d + 1)
         rows, cpm_rows = [], []
         for name, sg in cands.items():
             if not np.isfinite(sg) or sg <= 0: continue
@@ -388,8 +396,7 @@ if app_mode == "🛠️ FA prepare":
         data = valid_df[col_name]
         n = len(data)
         if n < 3: return None, 1.0, 1.0, 0, 0, n
-        mean = data.mean()
-        std_overall = data.std(ddof=1) if n > 1 else 0.0001
+        mean, std_overall = data.mean(), data.std(ddof=1) if n > 1 else 0.0001
         ad_stat = stats.anderson(data, dist='norm').statistic
         ad_star = ad_stat * (1 + 0.75/n + 2.25/(n**2))
         if ad_star >= 0.6: ad_pval = np.exp(1.2937 - 5.709*ad_star + 0.0186*(ad_star**2))
@@ -483,63 +490,8 @@ if app_mode == "🛠️ FA prepare":
                 if n >= 3:
                     with grid_cols[idx % 2]: st.plotly_chart(fig_p, use_container_width=True)
 
-    EXPORT_TYPES = ["Boxplot", "Process Capability", "Probability Plot"]
-    EXPORT_FILE = {"Boxplot": "boxplot", "Process Capability": "process_capability", "Probability Plot": "probability_plot"}
-
-    def build_export_zips(points, types, img_w, img_h):
-        cav_tag = "" if cavity_filter == "ทั้งหมด (Combined)" else f"_Cavity{cavity_filter}"
-        files = {t: [] for t in types}
-        for i, col_name in enumerate(points, 1):
-            c_lsl, c_target, c_usl = lsl_input, target_input, usl_input if "Show ทีละกราฟ" in view_mode and col_name == selected_col else parse_spec_from_col(col_name)
-            safe = re.sub(r"[^0-9A-Za-z._-]+", "_", str(col_name)).strip("_")
-            base = f"{i:02d}_{safe}{cav_tag}"
-            if "Boxplot" in types:
-                f = create_boxplot(edited_df, col_name, group_col, c_lsl, c_target, c_usl)
-                files["Boxplot"].append((f"{base}_boxplot.png", f.to_image(format="png", width=img_w, height=img_h, scale=2)))
-            if "Process Capability" in types:
-                f, _m = create_capability(edited_df, col_name, group_col, cavity_filter, c_lsl, c_target, c_usl, subgroup_size)
-                if f is not None: files["Process Capability"].append((f"{base}_capability.png", f.to_image(format="png", width=1000, height=720, scale=2)))
-            if "Probability Plot" in types:
-                f = create_prob_plot(edited_df, col_name, group_col, cavity_filter)[0]
-                if f is not None: files["Probability Plot"].append((f"{base}_probplot.png", f.to_image(format="png", width=img_w, height=img_h, scale=2)))
-        zips = {}
-        for t, items in files.items():
-            buf = BytesIO()
-            with zipfile.ZipFile(buf, "w", zipfile.ZIP_DEFLATED) as zf:
-                for name, b in items: zf.writestr(name, b)
-            zips[t] = buf.getvalue()
-        if len(types) > 1:
-            buf = BytesIO()
-            with zipfile.ZipFile(buf, "w", zipfile.ZIP_DEFLATED) as zf:
-                for t, items in files.items():
-                    for name, b in items: zf.writestr(f"{EXPORT_FILE[t]}/{name}", b)
-            zips["ทั้งหมด"] = buf.getvalue()
-        return zips
-
-    with st.sidebar:
-        st.header("🖼️ ดาวน์โหลดรูปภาพ")
-        export_cols = st.multiselect("พอยต์ที่จะ export:", num_cols, default=num_cols)
-        export_types = st.multiselect("ชนิดกราฟ:", EXPORT_TYPES, default=EXPORT_TYPES)
-        ec1, ec2 = st.columns(2)
-        with ec1: export_w = st.number_input("กว้าง (px)", min_value=300, max_value=1600, value=600, step=50)
-        with ec2: export_h = st.number_input("สูง (px)", min_value=300, max_value=1200, value=480, step=20)
-        st.caption("ขนาดใช้กับ Boxplot และ Prob Plot ส่วน Capability ใช้ 1000×720 คงที่")
-        if st.button("🖼️ สร้างไฟล์ ZIP", use_container_width=True):
-            if not export_cols or not export_types: st.warning("เลือกพอยต์และชนิดกราฟอย่างน้อยอย่างละ 1")
-            else:
-                try:
-                    with st.spinner(f"กำลังสร้างรูป {len(export_cols)} พอยต์..."):
-                        st.session_state.export_zips = build_export_zips(export_cols, export_types, int(export_w), int(export_h))
-                except Exception as e:
-                    st.session_state.pop("export_zips", None)
-                    st.error(f"สร้างรูปไม่สำเร็จ: {e}\n\nลอง: pip install kaleido==0.2.1 plotly==5.24.1")
-        if "export_zips" in st.session_state:
-            for _t_name, _bytes in st.session_state.export_zips.items():
-                _fname = "all_charts.zip" if _t_name == "ทั้งหมด" else f"{EXPORT_FILE[_t_name]}.zip"
-                st.download_button(f"⬇️ {_t_name} (.zip)", data=_bytes, file_name=_fname, mime="application/zip", use_container_width=True, key=f"dl_{_t_name}")
-
 # ##############################################################################
-# โหมดที่ 2: 📦 Normal Boxplot (แยกกราฟ B1..B40 + จัดลำดับ Box + เพิ่ม Spec อัตโนมัติ)
+# โหมดที่ 2: 📦 Normal Boxplot (แยกกราฟ B1..B40 + จัดลำดับ Box + เพิ่ม Spec อัตโนมัติ + โหลด Settings)
 # ##############################################################################
 else:
     st.sidebar.header("📦 ตั้งค่า Normal Boxplot")
@@ -557,15 +509,16 @@ else:
             "Multiple Y's - Simple (ไม่มีกลุ่ม)",
             "One Y - Simple (ดูทีละพอยต์ ไม่มีกลุ่ม)"
         ],
-        index=0
+        index=ls.get("boxplot_type_index", 0)
     )
 
     if boxplot_type.startswith("One Y"):
         y_var = st.sidebar.selectbox("2. Graph variable (เลือกพอยต์ Y):", default_y_cols)
         y_vars = [y_var] if y_var else []
     else:
+        saved_y_vars = ls.get("nb_y_vars", default_y_cols)
         if "nb_y_vars" not in st.session_state or not set(st.session_state.nb_y_vars).issubset(set(all_cols)):
-            st.session_state.nb_y_vars = default_y_cols
+            st.session_state.nb_y_vars = [y for y in saved_y_vars if y in all_cols] if saved_y_vars else default_y_cols
         b_all, b_clr = st.sidebar.columns(2)
         if b_all.button("✅ เลือกพอยต์ทั้งหมด", use_container_width=True): st.session_state.nb_y_vars = default_y_cols
         if b_clr.button("🧹 ล้างพอยต์", use_container_width=True): st.session_state.nb_y_vars = default_y_cols[:1]
@@ -574,11 +527,11 @@ else:
     group_vars = []
     if "With Groups" in boxplot_type:
         cat_candidates = [c for c in all_cols if c not in y_vars] + [c for c in y_vars]
-        default_grps = [c for c in all_cols if str(c).strip().lower() in {"cav", "cavity", "month", "date", "con", "condition", "mold"} and c not in y_vars]
+        default_grps = ls.get("group_vars", [c for c in all_cols if str(c).strip().lower() in {"cav", "cavity", "month", "date", "con", "condition", "mold"} and c not in y_vars])
         if not default_grps and len(cat_candidates) > 0: default_grps = cat_candidates[:1]
         group_vars = st.sidebar.multiselect(
             "3. Categorical variables for grouping (เรียงลำดับ นอกสุด -> ในสุด):",
-            cat_candidates, default=default_grps[:4], max_selections=4,
+            cat_candidates, default=[g for g in default_grps if g in cat_candidates][:4], max_selections=4,
             help="ลำดับแรกจะอยู่ชั้นนอกสุด (ด้านล่างสุด) ลำดับสุดท้ายจะอยู่ติดแกน X"
         )
 
@@ -586,34 +539,73 @@ else:
     if group_vars:
         with st.sidebar.expander("🔢 4. จัดลำดับ Box บนแกน X (เช่น Jun, Jul, Aug, Sep)", expanded=True):
             st.caption("คลิกลบแล้วใส่ใหม่ตามลำดับก่อน-หลังที่ต้องการ (ค่าเริ่มต้นเรียงเดือนและตัวเลขให้อัตโนมัติ)")
+            saved_orders = ls.get("custom_orders", {})
             for gv in group_vars:
                 raw_unique = [str(v) for v in edited_df[gv].dropna().unique() if str(v).strip() != ""]
                 auto_sorted = smart_sort_list(raw_unique)
-                sel_order = st.multiselect(f"ลำดับของ `{gv}` (ซ้าย -> ขวา):", options=auto_sorted, default=auto_sorted, key=f"order_{gv}_{st.session_state.editor_ver}")
+                def_val = saved_orders.get(gv, auto_sorted)
+                def_val = [v for v in def_val if v in auto_sorted]
+                sel_order = st.multiselect(f"ลำดับของ `{gv}` (ซ้าย -> ขวา):", options=auto_sorted, default=def_val, key=f"order_{gv}_{st.session_state.editor_ver}")
                 custom_orders[gv] = sel_order if sel_order else auto_sorted
 
     with st.sidebar.expander("🗂️ 5. การแยกกราฟ (Separate Panels)", expanded=True):
         if len(y_vars) > 1:
-            multi_y_display = st.radio("การแสดงกราฟเมื่อเลือกหลายพอยต์:", ["📄 แยกเป็นกราฟคนละใบ (B1, B2... แยกกัน)", "📊 รวมทุกพอยต์ไว้ในกราฟใบเดียวกัน"], index=0)
+            multi_y_display = st.radio("การแสดงกราฟเมื่อเลือกหลายพอยต์:", ["📄 แยกเป็นกราฟคนละใบ (B1, B2... แยกกัน)", "📊 รวมทุกพอยต์ไว้ในกราฟใบเดียวกัน"], index=ls.get("multi_y_display_idx", 0))
         else:
             multi_y_display = "📄 แยกเป็นกราฟคนละใบ (B1, B2... แยกกัน)"
-        panel_cols_count = st.radio("จำนวนคอลัมน์ที่เรียงกราฟหน้าเว็บ:", [1, 2], index=1 if len(y_vars) > 1 else 0, horizontal=True)
-        split_by_col = st.selectbox("แยกกราฟเพิ่มตามคอลัมน์ (By variable):", ["ไม่แยกเพิ่ม"] + all_cols, index=0)
+        panel_cols_count = st.radio("จำนวนคอลัมน์ที่เรียงกราฟหน้าเว็บ:", [1, 2], index=ls.get("panel_cols_count_idx", 1 if len(y_vars) > 1 else 0), horizontal=True)
+        split_by_col = st.selectbox("แยกกราฟเพิ่มตามคอลัมน์ (By variable):", ["ไม่แยกเพิ่ม"] + all_cols, index=all_cols.index(ls["split_by_col"]) + 1 if "split_by_col" in ls and ls["split_by_col"] in all_cols else 0)
 
     with st.sidebar.expander("🔍 6. Data Options (เลือกแถว)", expanded=False):
         max_r = max(1, len(edited_df))
-        row_range = st.slider("เลือกช่วงแถว (Row #):", 1, max_r, (1, max_r))
-        exclude_rows_str = st.text_input("ยกเว้นแถวที่ระบุ (เช่น 2, 5, 8-12):", value="")
+        saved_range = ls.get("row_range", [1, max_r])
+        saved_range[1] = min(saved_range[1], max_r)
+        row_range = st.slider("เลือกช่วงแถว (Row #):", 1, max_r, tuple(saved_range))
+        exclude_rows_str = st.text_input("ยกเว้นแถวที่ระบุ (เช่น 2, 5, 8-12):", value=ls.get("exclude_rows_str", ""))
 
     with st.sidebar.expander("🎨 7. ตกแต่งสี & จุด Mean", expanded=False):
         c_col1, c_col2 = st.columns(2)
-        with c_col1: nb_fill_hex = st.color_picker("สีกล่องหลัก", "#72A0E5", key="nb_fill")
-        with c_col2: nb_line_hex = st.color_picker("สีเส้นขอบ", "#333333", key="nb_line")
-        color_by_col = st.selectbox("แยกสีกล่องตามกลุ่ม (Color by):", ["สีเดียวกันทั้งหมด"] + group_vars, index=0)
-        show_mean_symbol = st.checkbox("แสดงจุดค่าเฉลี่ย (Mean Symbol ⊕) และเส้นเชื่อม", value=True)
-        show_ind_points = st.checkbox("แสดงจุดข้อมูลทั้งหมด (Individual Points)", value=False)
-        nb_box_width = st.slider("ความอ้วนของกล่อง", 0.15, 0.85, 0.50, 0.05, key="nb_bw")
-        nb_chart_h = st.slider("ความสูงของกราฟ (px)", 360, 800, 480, 20, key="nb_ch")
+        with c_col1: nb_fill_hex = st.color_picker("สีกล่องหลัก", ls.get("nb_fill_hex", "#72A0E5"), key="nb_fill2")
+        with c_col2: nb_line_hex = st.color_picker("สีเส้นขอบ", ls.get("nb_line_hex", "#333333"), key="nb_line2")
+        
+        saved_color_col = ls.get("color_by_col", "สีเดียวกันทั้งหมด")
+        color_by_col = st.selectbox("แยกสีกล่องตามกลุ่ม (Color by):", ["สีเดียวกันทั้งหมด"] + group_vars, index=(["สีเดียวกันทั้งหมด"] + group_vars).index(saved_color_col) if saved_color_col in (["สีเดียวกันทั้งหมด"] + group_vars) else 0)
+        show_mean_symbol = st.checkbox("แสดงจุดค่าเฉลี่ย (Mean Symbol ⊕) และเส้นเชื่อม", value=ls.get("show_mean_symbol", True))
+        show_ind_points = st.checkbox("แสดงจุดข้อมูลทั้งหมด (Individual Points)", value=ls.get("show_ind_points", False))
+        show_spec_nb = st.checkbox("เปิดใช้เส้น Spec บนกราฟ Boxplot", value=ls.get("show_spec_nb", True))
+        nb_box_width = st.slider("ความอ้วนของกล่อง", 0.15, 0.85, ls.get("nb_box_width", 0.50), 0.05, key="nb_bw2")
+        nb_chart_h = st.slider("ความสูงของกราฟ (px)", 360, 800, ls.get("nb_chart_h", 480), 20, key="nb_ch2")
+
+    # --- ฟังก์ชันเซฟ Excel แบบรวม Settings (Normal Boxplot) ---
+    def to_excel(df):
+        output = BytesIO()
+        with pd.ExcelWriter(output, engine='xlsxwriter') as writer:
+            df.to_excel(writer, index=True, sheet_name='Adjusted_Data')
+            settings_json = json.dumps({
+                "app_mode": app_mode,
+                "boxplot_type_index": ["Multiple Y's - With Groups (แยกกราฟ B1, B2... ตามกลุ่ม)", "One Y - With Groups (ดูทีละพอยต์ ตามกลุ่ม)", "Multiple Y's - Simple (ไม่มีกลุ่ม)", "One Y - Simple (ดูทีละพอยต์ ไม่มีกลุ่ม)"].index(boxplot_type),
+                "nb_y_vars": y_vars,
+                "group_vars": group_vars,
+                "custom_orders": custom_orders,
+                "multi_y_display_idx": 0 if "แยกเป็นกราฟคนละใบ" in multi_y_display else 1,
+                "panel_cols_count_idx": 0 if panel_cols_count == 1 else 1,
+                "split_by_col": split_by_col,
+                "row_range": list(row_range),
+                "exclude_rows_str": exclude_rows_str,
+                "nb_fill_hex": nb_fill_hex,
+                "nb_line_hex": nb_line_hex,
+                "color_by_col": color_by_col,
+                "show_mean_symbol": show_mean_symbol,
+                "show_ind_points": show_ind_points,
+                "show_spec_nb": show_spec_nb,
+                "nb_box_width": nb_box_width,
+                "nb_chart_h": nb_chart_h,
+                "spec_table": edited_specs.to_dict(orient="records") if 'edited_specs' in locals() and edited_specs is not None else []
+            })
+            pd.DataFrame({"Config_JSON": [settings_json]}).to_excel(writer, index=False, sheet_name="Settings")
+        return output.getvalue()
+        
+    st.sidebar.download_button(label="💾 เซฟข้อมูลและตั่งค่า (.xlsx)", data=to_excel(edited_df), file_name="adjusted_data_with_settings.xlsx", use_container_width=True)
 
     def parse_excluded_rows(text_str):
         ex = set()
@@ -642,17 +634,21 @@ else:
     # --- ส่วนกำหนดเส้น Spec แบบ Custom ---
     with st.expander("📏 8. กำหนดเส้น Spec แต่ละกราฟ (เพิ่มเส้นแบบ Minitab)", expanded=True):
         st.caption("พิมพ์ค่า Spec ที่ต้องการให้แสดงบนกราฟ หากช่องไหนปล่อยว่าง (NaN) เส้นนั้นจะไม่แสดง (ดึงค่าเริ่มต้นอัตโนมัติจากชื่อพอยต์)")
+        
         spec_records = []
+        if "loaded_specs" in st.session_state and not st.session_state.loaded_specs.empty:
+            spec_df_base = st.session_state.loaded_specs
+        else:
+            spec_df_base = pd.DataFrame()
+
         for y in y_vars:
             l, t, u = parse_spec_from_col(y)
-            spec_records.append({
-                "Point": y,
-                "USL Outer (แดง)": u,
-                "USL Inner (แดง)": None,
-                "Target (เขียว)": t,
-                "LSL Inner (แดง)": None,
-                "LSL Outer (แดง)": l
-            })
+            default_row = {"Point": y, "USL Outer (แดง)": u, "USL Inner (แดง)": None, "Target (เขียว)": t, "LSL Inner (แดง)": None, "LSL Outer (แดง)": l}
+            if not spec_df_base.empty and y in spec_df_base["Point"].values:
+                match_row = spec_df_base[spec_df_base["Point"] == y].iloc[0].to_dict()
+                spec_records.append(match_row)
+            else:
+                spec_records.append(default_row)
         
         edited_specs = st.data_editor(
             pd.DataFrame(spec_records),
@@ -666,8 +662,9 @@ else:
                 "LSL Inner (แดง)": st.column_config.NumberColumn(format="%.5f"),
                 "LSL Outer (แดง)": st.column_config.NumberColumn(format="%.5f")
             },
-            key=f"spec_editor_{len(y_vars)}"
+            key=f"spec_editor_{len(y_vars)}_{st.session_state.editor_ver}"
         )
+        st.session_state.loaded_specs = edited_specs # เซฟตารางกลับให้จำค่าเวลาสลับโหมด
 
     def build_minitab_normal_boxplot(df_sub, y_list, grp_list, title_suffix=""):
         records = []
@@ -745,9 +742,8 @@ else:
         y_min, y_max = float(long_df["Value"].min()), float(long_df["Value"].max())
         spec_margin_r = 50
         
-        # ดึงค่า Spec ของพอยต์แรกที่ถูกพล็อตในกราฟใบนี้
         current_y_name = y_list[0] if len(y_list) == 1 else None
-        if current_y_name and edited_specs is not None:
+        if show_spec_nb and current_y_name and edited_specs is not None:
             spec_row = edited_specs[edited_specs["Point"] == current_y_name]
             if not spec_row.empty:
                 specs_dict = spec_row.iloc[0].to_dict()
@@ -774,20 +770,18 @@ else:
                         y_min = min(y_min, val)
                         y_max = max(y_max, val)
                 if has_spec:
-                    spec_margin_r = 95 # เพิ่มพื้นที่ด้านขวาให้ตัวเลข Spec
+                    spec_margin_r = 95 
 
         if color_by_col != "สีเดียวกันทั้งหมด":
-            spec_margin_r += 90 # เผื่อที่ให้ Legend ด้านขวา
+            spec_margin_r += 90
 
-        # --- สร้างแกน X หลายชั้น และเอียง Text ชั้นในสุด 45 องศา ---
         n_levels = len(hierarchy_cols)
         innermost_ticks = [str(c[-1]) for c in combos]
         bottom_margin = 55 + max(0, n_levels - 1) * 35
 
         for lvl_idx in range(n_levels):
             col_label = hierarchy_cols[lvl_idx]
-            if lvl_idx == n_levels - 1:
-                y_pos_paper = -0.15 # ขยับชั้นในสุดลงมาอีกนิดเพื่อหลบตัวอักษรเอียง
+            if lvl_idx == n_levels - 1: y_pos_paper = -0.15 
             else:
                 depth_from_inner = (n_levels - 1) - lvl_idx
                 y_pos_paper = -0.15 - depth_from_inner * 0.085
@@ -814,11 +808,7 @@ else:
             title=dict(text=f"<b>{chart_title}</b>", x=0.5, xanchor="center", font=dict(family="Arial, sans-serif")),
             yaxis_title=y_list[0] if len(y_list) == 1 else "Data",
             yaxis=dict(range=[y_min - span * 0.1, y_max + span * 0.1], tickformat=".4f", gridcolor="#EEEEEE", zeroline=False, tickfont=dict(family="Arial, sans-serif")),
-            xaxis=dict(
-                tickmode="array", tickvals=list(range(n_positions)), ticktext=innermost_ticks,
-                range=[-0.6, max(0.6, n_positions - 0.4)], gridcolor="#EEEEEE",
-                tickangle=-45, tickfont=dict(family="Arial, sans-serif")
-            ),
+            xaxis=dict(tickmode="array", tickvals=list(range(n_positions)), ticktext=innermost_ticks, range=[-0.6, max(0.6, n_positions - 0.4)], gridcolor="#EEEEEE", tickangle=-45, tickfont=dict(family="Arial, sans-serif")),
             plot_bgcolor="white", paper_bgcolor="#FAFAFA",
             height=nb_chart_h, margin=dict(l=90, r=spec_margin_r, t=55, b=bottom_margin),
             legend=dict(title=color_by_col if color_by_col != "สีเดียวกันทั้งหมด" else "", orientation="v", y=1, x=1.05, xanchor="left", yanchor="top", font=dict(family="Arial, sans-serif"))
