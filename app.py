@@ -92,7 +92,6 @@ if "df" not in st.session_state:
     df_init.index.name = "Row"
     st.session_state.df = df_init
 
-# ตัวแปรสำหรับเก็บ Settings ที่โหลดจาก Excel กลับมา
 if "loaded_settings" not in st.session_state:
     st.session_state.loaded_settings = {}
 if "editor_ver" not in st.session_state:
@@ -111,9 +110,8 @@ with btn_col1:
         if uploaded_file is not None:
             if uploaded_file.name.endswith(".csv"):
                 temp_df = pd.read_csv(uploaded_file)
-                st.session_state.loaded_settings = {} # รีเซ็ตการตั้งค่าถ้าเป็นไฟล์ CSV ธรรมดา
+                st.session_state.loaded_settings = {} 
             else:
-                # อ่านไฟล์ Excel ทุกชีทเพื่อหาชีท Settings
                 xls = pd.ExcelFile(uploaded_file)
                 temp_df = pd.read_excel(xls, sheet_name=xls.sheet_names[0])
                 if "Settings" in xls.sheet_names:
@@ -164,14 +162,10 @@ with st.expander("📝 ตารางข้อมูล (คลิกแก้�
     edited_df.index.name = "Row"
 
 st.sidebar.divider()
-
-# ##############################################################################
-# ดึงค่า Settings ที่เคยเซฟไว้มาใช้ (ถ้ามี)
-# ##############################################################################
 ls = st.session_state.loaded_settings
 
 # ==============================================================================
-# โหมดที่ 1: 🛠️ FA prepare (ยังเก็บการตั้งค่าแยกไว้เหมือนเดิม)
+# โหมดที่ 1: 🛠️ FA prepare
 # ==============================================================================
 if app_mode == "🛠️ FA prepare":
     st.sidebar.header("⚙️ ตั้งค่า (FA prepare)")
@@ -207,8 +201,8 @@ if app_mode == "🛠️ FA prepare":
         box_gap_val = st.slider("ระยะห่างระหว่างกล่อง", 0.3, 2.5, ls.get("box_gap_val", 1.0), 0.1)
         chart_height = st.slider("ความสูงของกราฟ (px)", 380, 700, ls.get("nb_chart_h", 480), 20)
 
-    # --- ฟังก์ชันเซฟ Excel แบบรวม Settings ---
-    def to_excel(df):
+    # --- ฟังก์ชันเซฟ Excel (FA prepare) ---
+    def to_excel_fa(df):
         output = BytesIO()
         with pd.ExcelWriter(output, engine='xlsxwriter') as writer:
             df.to_excel(writer, index=True, sheet_name='Adjusted_Data')
@@ -223,7 +217,7 @@ if app_mode == "🛠️ FA prepare":
             pd.DataFrame({"Config_JSON": [settings_json]}).to_excel(writer, index=False, sheet_name="Settings")
         return output.getvalue()
         
-    st.sidebar.download_button(label="💾 เซฟข้อมูลและตั่งค่า (.xlsx)", data=to_excel(edited_df), file_name="adjusted_data_with_settings.xlsx", use_container_width=True)
+    st.sidebar.download_button(label="💾 เซฟข้อมูลและตั้งค่า (.xlsx)", data=to_excel_fa(edited_df), file_name="adjusted_data_FA.xlsx", use_container_width=True)
 
     def get_filtered_data(df_in, col_name, grp_col, cav_val):
         temp_df = df_in[[col_name] + ([grp_col] if grp_col != "ไม่แยกกลุ่ม" else [])].copy()
@@ -344,6 +338,7 @@ if app_mode == "🛠️ FA prepare":
         _t(0.155, 0.838, "Process Data", "center")
         for yy, (lb, vv) in zip([0.812, 0.784, 0.758, 0.730, 0.702, 0.673, 0.646], [("LSL", fmt6(lsl)), ("Target", fmt6(target)), ("USL", fmt6(usl)), ("Sample Mean", fmt6(mean)), ("Sample N", f"{n}"), ("StDev(Overall)", fmt6(std_overall)), ("StDev(Within)", fmt6(std_within))]):
             _t(0.03, yy, lb); _t(0.152, yy, vv)
+
         fig.add_shape(type="line", xref="paper", yref="paper", x0=0.748, x1=0.800, y0=0.840, y1=0.840, line=dict(color="#8B1A1A", width=2))
         fig.add_shape(type="line", xref="paper", yref="paper", x0=0.748, x1=0.800, y0=0.812, y1=0.812, line=dict(color="#555555", width=2, dash="dash"))
         _t(0.809, 0.840, "Overall"); _t(0.809, 0.812, "Within")
@@ -367,7 +362,8 @@ if app_mode == "🛠️ FA prepare":
             yaxis=dict(domain=[0.359, PLOT_TOP], range=[0, y_max_val * 1.08], showticklabels=False, showgrid=True, gridcolor="#E6E6E6", zeroline=False, showline=True, linecolor="#888888", mirror=True, nticks=6),
             bargap=0, showlegend=False, plot_bgcolor="white", paper_bgcolor="#DDDDDD", height=720, margin=dict(l=0, r=0, t=0, b=0)
         )
-        return fig, {"N": n, "Mean": mean, "StDev(Overall)": std_overall, "StDev(Within)": std_within, "Cp": cp, "Cpk": min(cpl, cpu), "Pp": pp, "Ppk": min(ppl, ppu), "Cpm": cpm}
+        metrics = {"N": n, "Mean": mean, "StDev(Overall)": std_overall, "StDev(Within)": std_within, "Cp": cp, "Cpk": min(cpl, cpu), "Pp": pp, "Ppk": min(ppl, ppu), "Cpm": cpm}
+        return fig, metrics
 
     def diagnose_capability(data, lsl, target, usl, subgroup_size=1):
         x = np.asarray(data, dtype=float); n = len(x); mean = x.mean(); s = x.std(ddof=1); dx = np.diff(x); mr = np.abs(dx)
@@ -490,8 +486,55 @@ if app_mode == "🛠️ FA prepare":
                 if n >= 3:
                     with grid_cols[idx % 2]: st.plotly_chart(fig_p, use_container_width=True)
 
+    # --- ส่วน Export ZIP ของ FA prepare ---
+    with st.sidebar.expander("🖼️ ดาวน์โหลดรูปภาพ (Export ZIP)", expanded=True):
+        EXPORT_TYPES = ["Boxplot", "Process Capability", "Probability Plot"]
+        export_cols = st.multiselect("พอยต์ที่จะ export:", num_cols, default=num_cols)
+        export_types = st.multiselect("ชนิดกราฟ:", EXPORT_TYPES, default=EXPORT_TYPES)
+        ec1, ec2 = st.columns(2)
+        with ec1: export_w = st.number_input("กว้าง (px)", min_value=300, max_value=1600, value=600, step=50, key="fa_w")
+        with ec2: export_h = st.number_input("สูง (px)", min_value=300, max_value=1200, value=480, step=20, key="fa_h")
+        
+        if st.button("🖼️ สร้างไฟล์ ZIP (FA prepare)", use_container_width=True):
+            if not export_cols or not export_types: st.warning("เลือกพอยต์และชนิดกราฟอย่างน้อยอย่างละ 1")
+            else:
+                try:
+                    with st.spinner(f"กำลังสร้างรูป {len(export_cols)} พอยต์..."):
+                        cav_tag = "" if cavity_filter == "ทั้งหมด (Combined)" else f"_Cavity{cavity_filter}"
+                        files = {t: [] for t in export_types}
+                        for i, col_name in enumerate(export_cols, 1):
+                            c_lsl, c_target, c_usl = lsl_input, target_input, usl_input if "Show ทีละกราฟ" in view_mode and col_name == selected_col else parse_spec_from_col(col_name)
+                            safe = re.sub(r"[^0-9A-Za-z._-]+", "_", str(col_name)).strip("_")
+                            base = f"{i:02d}_{safe}{cav_tag}"
+                            if "Boxplot" in export_types:
+                                f = create_boxplot(edited_df, col_name, group_col, c_lsl, c_target, c_usl)
+                                files["Boxplot"].append((f"{base}_boxplot.png", f.to_image(format="png", width=int(export_w), height=int(export_h), scale=2)))
+                            if "Process Capability" in export_types:
+                                f, _m = create_capability(edited_df, col_name, group_col, cavity_filter, c_lsl, c_target, c_usl, subgroup_size)
+                                if f is not None: files["Process Capability"].append((f"{base}_capability.png", f.to_image(format="png", width=1000, height=720, scale=2)))
+                            if "Probability Plot" in export_types:
+                                f = create_prob_plot(edited_df, col_name, group_col, cavity_filter)[0]
+                                if f is not None: files["Probability Plot"].append((f"{base}_probplot.png", f.to_image(format="png", width=int(export_w), height=int(export_h), scale=2)))
+                        
+                        buf = BytesIO()
+                        with zipfile.ZipFile(buf, "w", zipfile.ZIP_DEFLATED) as zf:
+                            if len(export_types) > 1:
+                                export_file_names = {"Boxplot": "boxplot", "Process Capability": "process_capability", "Probability Plot": "probability_plot"}
+                                for t, items in files.items():
+                                    for name, b in items: zf.writestr(f"{export_file_names[t]}/{name}", b)
+                            else:
+                                for t, items in files.items():
+                                    for name, b in items: zf.writestr(name, b)
+                        st.session_state.fa_export_zip = buf.getvalue()
+                except Exception as e:
+                    st.session_state.pop("fa_export_zip", None)
+                    st.error(f"สร้างรูปไม่สำเร็จ: {e}")
+                    
+        if "fa_export_zip" in st.session_state:
+            st.download_button("⬇️ ดาวน์โหลดกราฟทั้งหมด (.zip)", data=st.session_state.fa_export_zip, file_name="fa_charts.zip", mime="application/zip", use_container_width=True)
+
 # ##############################################################################
-# โหมดที่ 2: 📦 Normal Boxplot (แยกกราฟ B1..B40 + จัดลำดับ Box + เพิ่ม Spec อัตโนมัติ + โหลด Settings)
+# โหมดที่ 2: 📦 Normal Boxplot
 # ##############################################################################
 else:
     st.sidebar.header("📦 ตั้งค่า Normal Boxplot")
@@ -576,37 +619,6 @@ else:
         nb_box_width = st.slider("ความอ้วนของกล่อง", 0.15, 0.85, ls.get("nb_box_width", 0.50), 0.05, key="nb_bw2")
         nb_chart_h = st.slider("ความสูงของกราฟ (px)", 360, 800, ls.get("nb_chart_h", 480), 20, key="nb_ch2")
 
-    # --- ฟังก์ชันเซฟ Excel แบบรวม Settings (Normal Boxplot) ---
-    def to_excel(df):
-        output = BytesIO()
-        with pd.ExcelWriter(output, engine='xlsxwriter') as writer:
-            df.to_excel(writer, index=True, sheet_name='Adjusted_Data')
-            settings_json = json.dumps({
-                "app_mode": app_mode,
-                "boxplot_type_index": ["Multiple Y's - With Groups (แยกกราฟ B1, B2... ตามกลุ่ม)", "One Y - With Groups (ดูทีละพอยต์ ตามกลุ่ม)", "Multiple Y's - Simple (ไม่มีกลุ่ม)", "One Y - Simple (ดูทีละพอยต์ ไม่มีกลุ่ม)"].index(boxplot_type),
-                "nb_y_vars": y_vars,
-                "group_vars": group_vars,
-                "custom_orders": custom_orders,
-                "multi_y_display_idx": 0 if "แยกเป็นกราฟคนละใบ" in multi_y_display else 1,
-                "panel_cols_count_idx": 0 if panel_cols_count == 1 else 1,
-                "split_by_col": split_by_col,
-                "row_range": list(row_range),
-                "exclude_rows_str": exclude_rows_str,
-                "nb_fill_hex": nb_fill_hex,
-                "nb_line_hex": nb_line_hex,
-                "color_by_col": color_by_col,
-                "show_mean_symbol": show_mean_symbol,
-                "show_ind_points": show_ind_points,
-                "show_spec_nb": show_spec_nb,
-                "nb_box_width": nb_box_width,
-                "nb_chart_h": nb_chart_h,
-                "spec_table": edited_specs.to_dict(orient="records") if 'edited_specs' in locals() and edited_specs is not None else []
-            })
-            pd.DataFrame({"Config_JSON": [settings_json]}).to_excel(writer, index=False, sheet_name="Settings")
-        return output.getvalue()
-        
-    st.sidebar.download_button(label="💾 เซฟข้อมูลและตั่งค่า (.xlsx)", data=to_excel(edited_df), file_name="adjusted_data_with_settings.xlsx", use_container_width=True)
-
     def parse_excluded_rows(text_str):
         ex = set()
         for part in str(text_str).split(","):
@@ -664,7 +676,38 @@ else:
             },
             key=f"spec_editor_{len(y_vars)}_{st.session_state.editor_ver}"
         )
-        st.session_state.loaded_specs = edited_specs # เซฟตารางกลับให้จำค่าเวลาสลับโหมด
+        st.session_state.loaded_specs = edited_specs
+
+    # --- ฟังก์ชันเซฟ Excel แบบรวม Settings (Normal Boxplot) ---
+    def to_excel_nb(df):
+        output = BytesIO()
+        with pd.ExcelWriter(output, engine='xlsxwriter') as writer:
+            df.to_excel(writer, index=True, sheet_name='Adjusted_Data')
+            settings_json = json.dumps({
+                "app_mode": app_mode,
+                "boxplot_type_index": ["Multiple Y's - With Groups (แยกกราฟ B1, B2... ตามกลุ่ม)", "One Y - With Groups (ดูทีละพอยต์ ตามกลุ่ม)", "Multiple Y's - Simple (ไม่มีกลุ่ม)", "One Y - Simple (ดูทีละพอยต์ ไม่มีกลุ่ม)"].index(boxplot_type),
+                "nb_y_vars": y_vars,
+                "group_vars": group_vars,
+                "custom_orders": custom_orders,
+                "multi_y_display_idx": 0 if "แยกเป็นกราฟคนละใบ" in multi_y_display else 1,
+                "panel_cols_count_idx": 0 if panel_cols_count == 1 else 1,
+                "split_by_col": split_by_col,
+                "row_range": list(row_range),
+                "exclude_rows_str": exclude_rows_str,
+                "nb_fill_hex": nb_fill_hex,
+                "nb_line_hex": nb_line_hex,
+                "color_by_col": color_by_col,
+                "show_mean_symbol": show_mean_symbol,
+                "show_ind_points": show_ind_points,
+                "show_spec_nb": show_spec_nb,
+                "nb_box_width": nb_box_width,
+                "nb_chart_h": nb_chart_h,
+                "spec_table": edited_specs.to_dict(orient="records") if 'edited_specs' in locals() and edited_specs is not None else []
+            })
+            pd.DataFrame({"Config_JSON": [settings_json]}).to_excel(writer, index=False, sheet_name="Settings")
+        return output.getvalue()
+        
+    st.sidebar.download_button(label="💾 เซฟข้อมูลและตั้งค่า (.xlsx)", data=to_excel_nb(edited_df), file_name="adjusted_data_NB.xlsx", use_container_width=True)
 
     def build_minitab_normal_boxplot(df_sub, y_list, grp_list, title_suffix=""):
         records = []
@@ -808,7 +851,11 @@ else:
             title=dict(text=f"<b>{chart_title}</b>", x=0.5, xanchor="center", font=dict(family="Arial, sans-serif")),
             yaxis_title=y_list[0] if len(y_list) == 1 else "Data",
             yaxis=dict(range=[y_min - span * 0.1, y_max + span * 0.1], tickformat=".4f", gridcolor="#EEEEEE", zeroline=False, tickfont=dict(family="Arial, sans-serif")),
-            xaxis=dict(tickmode="array", tickvals=list(range(n_positions)), ticktext=innermost_ticks, range=[-0.6, max(0.6, n_positions - 0.4)], gridcolor="#EEEEEE", tickangle=-45, tickfont=dict(family="Arial, sans-serif")),
+            xaxis=dict(
+                tickmode="array", tickvals=list(range(n_positions)), ticktext=innermost_ticks,
+                range=[-0.6, max(0.6, n_positions - 0.4)], gridcolor="#EEEEEE",
+                tickangle=-45, tickfont=dict(family="Arial, sans-serif")
+            ),
             plot_bgcolor="white", paper_bgcolor="#FAFAFA",
             height=nb_chart_h, margin=dict(l=90, r=spec_margin_r, t=55, b=bottom_margin),
             legend=dict(title=color_by_col if color_by_col != "สีเดียวกันทั้งหมด" else "", orientation="v", y=1, x=1.05, xanchor="left", yanchor="top", font=dict(family="Arial, sans-serif"))
@@ -860,12 +907,12 @@ else:
                     full_sum_df = pd.concat(all_summaries, ignore_index=True)
                     st.dataframe(full_sum_df, use_container_width=True, hide_index=True)
 
-    with st.sidebar:
-        st.divider()
-        st.header("🖼️ ดาวน์โหลดรูปภาพ")
+    # --- ส่วน Export ZIP ของ Normal Boxplot ---
+    with st.sidebar.expander("🖼️ ดาวน์โหลดรูปภาพ (Export ZIP)", expanded=True):
         nb_ec1, nb_ec2 = st.columns(2)
         with nb_ec1: nb_exp_w = st.number_input("กว้าง (px)", min_value=400, max_value=2000, value=780, step=50, key="nb_w")
         with nb_ec2: nb_exp_h = st.number_input("สูง (px)", min_value=350, max_value=1400, value=int(nb_chart_h), step=20, key="nb_h")
+        
         if st.button("🖼️ สร้างไฟล์ ZIP (Normal Boxplot)", use_container_width=True):
             if not generated_charts: st.warning("ยังไม่มีกราฟให้ดาวน์โหลด")
             else:
@@ -880,6 +927,7 @@ else:
                         st.session_state.nb_export_zip = buf_nb.getvalue()
                 except Exception as e:
                     st.session_state.pop("nb_export_zip", None)
-                    st.error(f"สร้างรูปไม่สำเร็จ: {e}\n\nลอง: pip install kaleido==0.2.1 plotly==5.24.1")
+                    st.error(f"สร้างรูปไม่สำเร็จ: {e}")
+                    
         if "nb_export_zip" in st.session_state:
-            st.download_button("⬇️ ดาวน์โหลด Normal Boxplot (.zip)", data=st.session_state.nb_export_zip, file_name="normal_boxplots.zip", mime="application/zip", use_container_width=True)
+            st.download_button("⬇️ ดาวน์โหลดกราฟทั้งหมด (.zip)", data=st.session_state.nb_export_zip, file_name="normal_boxplots.zip", mime="application/zip", use_container_width=True)
