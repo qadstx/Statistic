@@ -52,6 +52,37 @@ def calc_within(values, subgroup_size=1):
     d = sum(len(g) - 1 for g in groups)
     return np.sqrt(ss / d) / c4(d + 1)
 
+# --- ฟังก์ชันเรียงลำดับอัจฉริยะ (เรียงเดือน Jan-Dec และเรียงเลข B1, B2..B10 อัตโนมัติ) ---
+MONTH_ORDER = {
+    "jan": 1, "january": 1, "ม.ค.": 1, "มกราคม": 1,
+    "feb": 2, "february": 2, "ก.พ.": 2, "กุมภาพันธ์": 2,
+    "mar": 3, "march": 3, "มี.ค.": 3, "มีนาคม": 3,
+    "apr": 4, "april": 4, "เม.ย.": 4, "เมษายน": 4,
+    "may": 5, "พ.ค.": 5, "พฤษภาคม": 5,
+    "jun": 6, "june": 6, "มิ.ย.": 6, "มิถุนายน": 6,
+    "jul": 7, "july": 7, "ก.ค.": 7, "กรกฎาคม": 7,
+    "aug": 8, "august": 8, "ส.ค.": 8, "สิงหาคม": 8,
+    "sep": 9, "sept": 9, "september": 9, "ก.ย.": 9, "กันยายน": 9,
+    "oct": 10, "october": 10, "ต.ค.": 10, "ตุลาคม": 10,
+    "nov": 11, "november": 11, "พ.ย.": 11, "พฤศจิกายน": 11,
+    "dec": 12, "december": 12, "ธ.ค.": 12, "ธันวาคม": 12
+}
+
+def smart_sort_key(val):
+    s = str(val).strip()
+    s_low = s.lower()
+    if s_low in MONTH_ORDER:
+        return (0, MONTH_ORDER[s_low], s_low)
+    try:
+        return (1, float(s), "")
+    except Exception:
+        pass
+    parts = [int(t) if t.isdigit() else t.lower() for t in re.split(r'(\d+)', s)]
+    return (2, parts, s_low)
+
+def smart_sort_list(items):
+    return sorted(items, key=smart_sort_key)
+
 # ==============================================================================
 # 0. เลือกโหมดแอปหลัก (App Mode Selector)
 # ==============================================================================
@@ -77,8 +108,8 @@ if "df" not in st.session_state:
         "B2_0.2845 ± 0.0015": np.round(np.random.normal(0.2843, 0.00012, 32), 4),
         "B3_0.2443 ± 0.0015": np.round(np.random.normal(0.2446, 0.00010, 32), 4),
         "B4_0.2008 ± 0.0015": np.round(np.random.normal(0.2010, 0.00011, 32), 4),
-        "Date": ["2026-11-01"]*16 + ["2026-11-02"]*16,
-        "Mold": ["MA"]*8 + ["MB"]*8 + ["MA"]*8 + ["MB"]*8,
+        "Month": ["Jun"]*8 + ["Jul"]*8 + ["Aug"]*8 + ["Sep"]*8,
+        "Con": ["A"]*16 + ["B"]*16,
         "Cavity": [1, 2]*16
     })
     df_init.index = np.arange(1, len(df_init) + 1)
@@ -104,8 +135,8 @@ with btn_col2:
     if st.button("🧹 ล้างตาราง", use_container_width=True):
         empty_df = pd.DataFrame({
             "B1_0.328 ± 0.0015": [np.nan]*10,
-            "Date": [""]*10,
-            "Mold": [""]*10,
+            "Month": [""]*10,
+            "Con": [""]*10,
             "Cavity": [1]*10
         })
         empty_df.index = np.arange(1, len(empty_df) + 1)
@@ -116,10 +147,12 @@ with btn_col2:
 st.session_state.df.index = np.arange(1, len(st.session_state.df) + 1)
 st.session_state.df.index.name = "Row"
 
+NON_MEASUREMENT_NAMES = {"cavity", "cav", "mold", "date", "month", "con", "condition", "lot", "machine", "shift", "operator", "group", "type"}
+
 with st.expander("📝 ตารางข้อมูล (คลิกแก้ตัวเลข / ก๊อปวางจาก Excel ได้ทันที)", expanded=True):
     _cfg = {"_index": st.column_config.NumberColumn("Row #", help="ลำดับแถวข้อมูล", format="%d")}
     for _c in st.session_state.df.columns:
-        if str(_c).lower() not in ["cavity", "mold", "date"] and pd.api.types.is_numeric_dtype(st.session_state.df[_c]):
+        if str(_c).strip().lower() not in NON_MEASUREMENT_NAMES and pd.api.types.is_numeric_dtype(st.session_state.df[_c]):
             _cfg[_c] = st.column_config.NumberColumn(format="%.5f", step=0.00001)
     edited_df = st.data_editor(
         st.session_state.df,
@@ -162,15 +195,14 @@ if app_mode == "🛠️ FA prepare":
     )
 
     all_cols = edited_df.columns.tolist()
-    non_measure_defaults = {"cavity", "mold", "date", "lot", "machine", "shift", "operator"}
-    num_cols = [c for c in all_cols if str(c).lower() not in non_measure_defaults]
+    num_cols = [c for c in all_cols if str(c).strip().lower() not in NON_MEASUREMENT_NAMES]
     if not num_cols:
         num_cols = all_cols
 
     group_col = st.sidebar.selectbox(
         "แบ่งกลุ่มตาม (Group by):",
         ["ไม่แยกกลุ่ม"] + all_cols,
-        index=all_cols.index("Cavity") + 1 if "Cavity" in all_cols else 0
+        index=all_cols.index("Cavity") + 1 if "Cavity" in all_cols else (all_cols.index("Cav") + 1 if "Cav" in all_cols else 0)
     )
 
     cavity_filter = "ทั้งหมด (Combined)"
@@ -750,14 +782,14 @@ if app_mode == "🛠️ FA prepare":
 
 
 # ##############################################################################
-# โหมดที่ 2: 📦 Normal Boxplot (Minitab Standard Multi-Group & Multi-Y Boxplot)
+# โหมดที่ 2: 📦 Normal Boxplot (แยกกราฟ B1, B2, B3... + จัดลำดับ Box เช่น Jun Jul Aug Sep)
 # ##############################################################################
 else:
     st.sidebar.header("📦 ตั้งค่า Normal Boxplot")
 
     all_cols = edited_df.columns.tolist()
-    non_measure_defaults = {"cavity", "mold", "date", "lot", "machine", "shift", "operator"}
-    default_y_cols = [c for c in all_cols if str(c).lower() not in non_measure_defaults]
+    # คัดกรองเฉพาะคอลัมน์พอยต์วัด (ไม่เอา Cav, Month, Con, Date ฯลฯ)
+    default_y_cols = [c for c in all_cols if str(c).strip().lower() not in NON_MEASUREMENT_NAMES]
     if not default_y_cols:
         default_y_cols = all_cols
 
@@ -765,70 +797,93 @@ else:
     boxplot_type = st.sidebar.selectbox(
         "1. รูปแบบ Boxplot (Minitab Style):",
         [
-            "One Y - Simple",
-            "One Y - With Groups",
-            "Multiple Y's - Simple",
-            "Multiple Y's - With Groups"
+            "Multiple Y's - With Groups (แยกกราฟ B1, B2... ตามกลุ่ม)",
+            "One Y - With Groups (ดูทีละพอยต์ ตามกลุ่ม)",
+            "Multiple Y's - Simple (ไม่มีกลุ่ม)",
+            "One Y - Simple (ดูทีละพอยต์ ไม่มีกลุ่ม)"
         ],
-        index=1
+        index=0
     )
 
     # 2. เลือก Graph Variables (Y)
     if boxplot_type.startswith("One Y"):
-        y_var = st.sidebar.selectbox("2. Graph variable (Y):", default_y_cols)
+        y_var = st.sidebar.selectbox("2. Graph variable (เลือกพอยต์ Y):", default_y_cols)
         y_vars = [y_var] if y_var else []
     else:
+        if "nb_y_vars" not in st.session_state or not set(st.session_state.nb_y_vars).issubset(set(all_cols)):
+            st.session_state.nb_y_vars = default_y_cols
+        b_all, b_clr = st.sidebar.columns(2)
+        if b_all.button("✅ เลือกพอยต์ทั้งหมด", use_container_width=True):
+            st.session_state.nb_y_vars = default_y_cols
+        if b_clr.button("🧹 ล้างพอยต์", use_container_width=True):
+            st.session_state.nb_y_vars = default_y_cols[:1]
         y_vars = st.sidebar.multiselect(
-            "2. Graph variables (เลือกได้หลาย Y):",
+            "2. Graph variables (เลือกพอยต์ B1, B2, B3...):",
             all_cols,
-            default=default_y_cols[:2] if len(default_y_cols) >= 2 else default_y_cols
+            key="nb_y_vars"
         )
 
     # 3. เลือก Categorical variables for grouping (1-4 ชั้น เรียงจากชั้นนอกสุด -> ในสุด)
     group_vars = []
     if "With Groups" in boxplot_type:
         cat_candidates = [c for c in all_cols if c not in y_vars] + [c for c in y_vars]
-        default_grps = [c for c in ["Date", "Mold", "Cavity"] if c in all_cols and c not in y_vars]
-        if not default_grps and "Cavity" in all_cols:
-            default_grps = ["Cavity"]
+        default_grps = [c for c in all_cols if str(c).strip().lower() in {"cav", "cavity", "month", "date", "con", "condition", "mold"} and c not in y_vars]
+        if not default_grps and len(cat_candidates) > 0:
+            default_grps = cat_candidates[:1]
         group_vars = st.sidebar.multiselect(
-            "3. Categorical variables for grouping (เลือกเรียงลำดับ นอกสุด -> ในสุด สูงสุด 4 ชั้น):",
+            "3. Categorical variables for grouping (เลือกเรียงลำดับ ชั้นนอกสุด -> ชั้นในสุด):",
             cat_candidates,
-            default=default_grps,
+            default=default_grps[:4],
             max_selections=4,
-            help="ลำดับที่คุณเลือกก่อน-หลัง จะถูกนำมาจัดกลุ่มไล่จากชั้นนอกสุดไปในสุด (เช่น Date -> Mold -> Cavity)"
+            help="ลำดับที่เลือกก่อนจะอยู่ชั้นนอกสุด (ด้านล่างสุด) และตัวสุดท้ายจะอยู่ชั้นในสุด (ติดแกน X)"
         )
 
-    # 4. Multiple Graphs / Panel Split (แยกกราฟคนละใบตามคอลัมน์ที่กำหนด)
-    with st.sidebar.expander("🗂️ Multiple Graphs (แยกกราฟย่อย)", expanded=False):
-        split_by_col = st.selectbox(
-            "แยกกราฟคนละใบตามคอลัมน์ (By variable):",
-            ["ไม่แยกกราฟย่อย"] + all_cols,
-            index=0
-        )
+    # 4. ฟังก์ชันจัดลำดับ Box บนแกน X (Custom Order เช่น Jun, Jul, Aug, Sep)
+    custom_orders = {}
+    if group_vars:
+        with st.sidebar.expander("🔢 4. จัดลำดับ Box บนแกน X (เช่น Jun, Jul, Aug, Sep)", expanded=True):
+            st.caption("คลิกกากบาทลบแล้วเลือกใส่ใหม่ตามลำดับก่อน-หลังที่ต้องการได้เลย (ค่าเริ่มต้นเรียงเดือน Jan–Dec และตัวเลขให้อัตโนมัติ)")
+            for gv in group_vars:
+                raw_unique = [str(v) for v in edited_df[gv].dropna().unique() if str(v).strip() != ""]
+                auto_sorted = smart_sort_list(raw_unique)
+                sel_order = st.multiselect(
+                    f"ลำดับของ `{gv}` (ซ้าย -> ขวา):",
+                    options=auto_sorted,
+                    default=auto_sorted,
+                    key=f"order_{gv}_{st.session_state.editor_ver}"
+                )
+                # ถ้ายูสเซอร์ลบออกบางตัว ให้แสดงเฉพาะตัวที่เลือกตามลำดับที่คลิก
+                custom_orders[gv] = sel_order if sel_order else auto_sorted
+
+    # 5. การแยกกราฟ (ตั้งค่าเริ่มต้นให้แยกกราฟ B1, B2, B3... คนละใบเหมือน Minitab)
+    with st.sidebar.expander("🗂️ 5. การแยกกราฟ (Separate Graphs / Panels)", expanded=True):
         if len(y_vars) > 1:
             multi_y_display = st.radio(
-                "การแสดงผล Multiple Y's:",
-                ["รวมในกราฟใบเดียวกัน (Overlay)", "แยกเป็นกราฟคนละใบตาม Y (Separate Panels)"],
+                "การแสดงกราฟเมื่อเลือกหลายพอยต์ (B1, B2, B3...):",
+                [
+                    "📄 แยกเป็นกราฟคนละใบ (B1, B2, B3... แยกกัน)",
+                    "📊 รวมทุกพอยต์ไว้ในกราฟใบเดียวกัน"
+                ],
                 index=0
             )
         else:
-            multi_y_display = "รวมในกราฟใบเดียวกัน (Overlay)"
-        panel_cols_count = st.radio("จำนวนคอลัมน์ที่เรียงกราฟ:", [1, 2], index=0, horizontal=True)
+            multi_y_display = "📄 แยกเป็นกราฟคนละใบ (B1, B2, B3... แยกกัน)"
 
-    # 5. Data Options (เลือกเฉพาะบางแถว หรือกรองข้อมูลตามเงื่อนไข)
-    with st.sidebar.expander("🔍 Data Options (เลือกแถว / กรองข้อมูล)", expanded=False):
+        panel_cols_count = st.radio("จำนวนคอลัมน์ที่เรียงกราฟบนหน้าเว็บ:", [1, 2], index=1 if len(y_vars) > 1 else 0, horizontal=True)
+        split_by_col = st.selectbox(
+            "แยกกราฟเพิ่มตามคอลัมน์อื่น (By variable):",
+            ["ไม่แยกเพิ่ม"] + all_cols,
+            index=0
+        )
+
+    # 6. Data Options (เลือกเฉพาะบางแถว หรือกรองข้อมูล)
+    with st.sidebar.expander("🔍 6. Data Options (เลือกแถว / กรองข้อมูล)", expanded=False):
         max_r = max(1, len(edited_df))
         row_range = st.slider("เลือกช่วงแถว (Row #):", 1, max_r, (1, max_r))
         exclude_rows_str = st.text_input("ยกเว้นแถวที่ระบุ (เช่น 2, 5, 8-12):", value="")
-        filter_cols = st.multiselect("กรองค่าเฉพาะในคอลัมน์:", all_cols)
-        active_filters = {}
-        for fc in filter_cols:
-            u_vals = edited_df[fc].dropna().astype(str).unique().tolist()
-            active_filters[fc] = st.multiselect(f"ค่าใน `{fc}` ที่ต้องการแสดง:", u_vals, default=u_vals)
 
-    # 6. Data View & Scale / Spec Lines
-    with st.sidebar.expander("🎨 ตกแต่ง & เส้น Spec / ค่า Mean", expanded=False):
+    # 7. ตกแต่งสี & เส้น Spec
+    with st.sidebar.expander("🎨 7. ตกแต่งสี & เส้น Spec / ค่า Mean", expanded=False):
         c_col1, c_col2 = st.columns(2)
         with c_col1:
             nb_fill_hex = st.color_picker("สีกล่องหลัก", "#72A0E5", key="nb_fill")
@@ -836,27 +891,15 @@ else:
             nb_line_hex = st.color_picker("สีเส้นขอบ", "#333333", key="nb_line")
 
         color_by_col = st.selectbox(
-            "แยกสีกล่องตามคอลัมน์ (Color by):",
-            ["สีเดียวกันทั้งหมด", "แยกสีตามตัวแปร Y"] + group_vars,
-            index=1 if len(y_vars) > 1 else 0
+            "แยกสีกล่องตามกลุ่ม (Color by):",
+            ["สีเดียวกันทั้งหมด"] + group_vars,
+            index=0
         )
         show_mean_symbol = st.checkbox("แสดงจุดค่าเฉลี่ย (Mean Symbol ⊕) และเส้นเชื่อม", value=True)
         show_ind_points = st.checkbox("แสดงจุดข้อมูลทั้งหมด (Individual Points)", value=False)
-        sort_groups_alpha = st.checkbox("เรียงลำดับกลุ่มตามตัวอักษร/ตัวเลข (ไม่ติ๊ก = เรียงตามที่เจอในตาราง)", value=True)
-
-        st.divider()
-        show_spec_nb = st.checkbox("แสดงเส้น Spec (USL / Target / LSL)", value=False)
-        if show_spec_nb:
-            auto_l, auto_t, auto_u = parse_spec_from_col(y_vars[0]) if y_vars else (0.3265, 0.3280, 0.3295)
-            sp1, sp2, sp3 = st.columns(3)
-            nb_lsl = sp1.number_input("LSL", value=auto_l, format="%.5f", step=0.0001, key="nb_lsl")
-            nb_tgt = sp2.number_input("Target", value=auto_t, format="%.5f", step=0.0001, key="nb_tgt")
-            nb_usl = sp3.number_input("USL", value=auto_u, format="%.5f", step=0.0001, key="nb_usl")
-        else:
-            nb_lsl = nb_tgt = nb_usl = None
-
-        nb_box_width = st.slider("ความอ้วนของกล่อง", 0.15, 0.80, 0.45, 0.05, key="nb_bw")
-        nb_chart_h = st.slider("ความสูงของกราฟ (px)", 380, 800, 540, 20, key="nb_ch")
+        show_spec_nb = st.checkbox("แสดงเส้น Spec อัตโนมัติ (ดึงจากชื่อคอลัมน์)", value=False)
+        nb_box_width = st.slider("ความอ้วนของกล่อง", 0.15, 0.85, 0.50, 0.05, key="nb_bw")
+        nb_chart_h = st.slider("ความสูงของกราฟ (px)", 360, 800, 480, 20, key="nb_ch")
 
     # --- ฟังก์ชันแปลงสตริงแถวที่ต้องการยกเว้น ---
     def parse_excluded_rows(text_str):
@@ -878,20 +921,21 @@ else:
                     pass
         return ex
 
-    # --- กรองตารางตาม Data Options ---
+    # --- กรองตารางตามช่วงแถว และค่าที่เลือกใน Custom Order ---
     work_df = edited_df.copy()
     work_df["Row_ID"] = work_df.index
     ex_set = parse_excluded_rows(exclude_rows_str)
     work_df = work_df[(work_df["Row_ID"] >= row_range[0]) & (work_df["Row_ID"] <= row_range[1])]
     if ex_set:
         work_df = work_df[~work_df["Row_ID"].isin(ex_set)]
-    for fc, allowed_vals in active_filters.items():
-        work_df = work_df[work_df[fc].astype(str).isin(allowed_vals)]
+    for gv, allowed_order in custom_orders.items():
+        if gv in work_df.columns and allowed_order:
+            work_df = work_df[work_df[gv].astype(str).isin(allowed_order)]
 
     PALETTE = ["#72A0E5", "#F4A261", "#2A9D8F", "#E76F51", "#9B5DE5", "#E9C46A", "#00BBF9", "#00F5D4"]
 
     # ==========================================================================
-    # ฟังก์ชันวาดกราฟ Normal Boxplot แบบ Minitab (รองรับ Multi-level Axis 1-4 ชั้น)
+    # ฟังก์ชันวาดกราฟ Normal Boxplot แบบ Minitab (เรียงลำดับตาม Custom Order เป๊ะ)
     # ==========================================================================
     def build_minitab_normal_boxplot(df_sub, y_list, grp_list, title_suffix=""):
         records = []
@@ -917,7 +961,6 @@ else:
             return None, pd.DataFrame()
 
         # กำหนดลำดับชั้นของแกน X (Outermost -> Innermost)
-        # ใน Minitab: ถ้ามีหลาย Y และมี Group ตัวแปร Y จะเป็นชั้นนอกสุด แล้วตามด้วย Group 1..4
         if len(y_list) > 1 and grp_list:
             hierarchy_cols = ["Y_Name"] + list(grp_list)
         elif len(y_list) > 1 and not grp_list:
@@ -927,14 +970,23 @@ else:
         else:
             hierarchy_cols = ["Y_Name"]
 
-        # จัดเรียง Combination ของกลุ่มบนแกน X
-        if sort_groups_alpha:
-            unique_combos_df = long_df[hierarchy_cols].drop_duplicates().sort_values(by=hierarchy_cols).reset_index(drop=True)
-        else:
-            unique_combos_df = long_df[hierarchy_cols].drop_duplicates().reset_index(drop=True)
+        # จัดเรียง Combination บนแกน X ตามลำดับที่ผู้ใช้กำหนดใน custom_orders!
+        unique_combos_df = long_df[hierarchy_cols].drop_duplicates().copy()
+        sort_key_cols = []
+        for i_h, h_col in enumerate(hierarchy_cols):
+            k_col = f"_sort_k_{i_h}"
+            sort_key_cols.append(k_col)
+            if h_col == "Y_Name":
+                order_map = {name: idx for idx, name in enumerate(y_list)}
+                unique_combos_df[k_col] = unique_combos_df[h_col].map(lambda x: order_map.get(x, 9999))
+            elif h_col in custom_orders and custom_orders[h_col]:
+                order_map = {str(name): idx for idx, name in enumerate(custom_orders[h_col])}
+                unique_combos_df[k_col] = unique_combos_df[h_col].map(lambda x: order_map.get(str(x), 9999))
+            else:
+                unique_combos_df[k_col] = unique_combos_df[h_col].map(smart_sort_key)
 
+        unique_combos_df = unique_combos_df.sort_values(by=sort_key_cols).drop(columns=sort_key_cols).reset_index(drop=True)
         combos = [tuple(r) for r in unique_combos_df.to_numpy()]
-        combo_to_pos = {c: i for i, c in enumerate(combos)}
         n_positions = len(combos)
 
         fig = go.Figure()
@@ -942,18 +994,15 @@ else:
         # จัดสีตามตัวเลือก Color by
         if color_by_col == "สีเดียวกันทั้งหมด":
             color_keys = ["All"]
-        elif color_by_col == "แยกสีตามตัวแปร Y":
-            color_keys = list(dict.fromkeys(long_df["Y_Name"].tolist()))
         elif color_by_col in long_df.columns:
-            color_keys = list(dict.fromkeys(long_df[color_by_col].tolist()))
+            color_keys = custom_orders.get(color_by_col, list(dict.fromkeys(long_df[color_by_col].tolist())))
         else:
             color_keys = ["All"]
 
         color_map = {}
         for i, ck in enumerate(color_keys):
-            color_map[ck] = hex_to_rgba(nb_fill_hex, 0.85) if i == 0 and len(color_keys) == 1 else hex_to_rgba(PALETTE[i % len(PALETTE)], 0.85)
+            color_map[str(ck)] = hex_to_rgba(nb_fill_hex, 0.85) if len(color_keys) == 1 else hex_to_rgba(PALETTE[i % len(PALETTE)], 0.85)
 
-        # วาดกล่องทีละตำแหน่งบนแกน X
         mean_x, mean_y = [], []
         summary_rows = []
 
@@ -976,6 +1025,7 @@ else:
 
             grp_label = " | ".join(f"{h}={v}" for h, v in zip(hierarchy_cols, combo))
             summary_rows.append({
+                "Point": y_list[0] if len(y_list) == 1 else sub["Y_Name"].iloc[0],
                 "Group": grp_label,
                 "N": len(vals),
                 "Mean": round(mean_v, 5),
@@ -988,12 +1038,7 @@ else:
                 "IQR": round(float(iqr), 5)
             })
 
-            if color_by_col == "สีเดียวกันทั้งหมด":
-                ck = "All"
-            elif color_by_col == "แยกสีตามตัวแปร Y":
-                ck = sub["Y_Name"].iloc[0]
-            else:
-                ck = sub[color_by_col].iloc[0]
+            ck = "All" if color_by_col == "สีเดียวกันทั้งหมด" else str(sub[color_by_col].iloc[0])
 
             hover_str = (
                 "<b>Row #: %{customdata}</b><br>"
@@ -1030,38 +1075,37 @@ else:
                 mode="lines+markers" if len(mean_x) > 1 else "markers",
                 name="Mean",
                 line=dict(color="#1F3E7A", width=1.2, dash="dot"),
-                marker=dict(symbol="circle-cross", size=9, color="white", line=dict(color="#1F3E7A", width=2)),
+                marker=dict(symbol="circle-cross", size=8, color="white", line=dict(color="#1F3E7A", width=1.8)),
                 hovertemplate="<b>Mean</b>: %{y:.5f}<extra></extra>",
                 showlegend=False
             ))
 
-        # วาดเส้น Spec ถ้าระบุไว้
-        if show_spec_nb and nb_usl is not None:
-            fig.add_hline(y=nb_usl, line_dash="dash", line_color="red", line_width=1.5,
-                          annotation_text=f" USL: {nb_usl}", annotation_position="right", annotation_font_color="black")
-            fig.add_hline(y=nb_tgt, line_dash="dash", line_color="limegreen", line_width=1.5,
-                          annotation_text=f" Target: {nb_tgt}", annotation_position="right", annotation_font_color="black")
-            fig.add_hline(y=nb_lsl, line_dash="dash", line_color="red", line_width=1.5,
-                          annotation_text=f" LSL: {nb_lsl}", annotation_position="right", annotation_font_color="black")
+        # วาดเส้น Spec อัตโนมัติถ้าเปิดไว้และเป็นกราฟเดี่ยว
+        y_min = float(long_df["Value"].min())
+        y_max = float(long_df["Value"].max())
+        if show_spec_nb and len(y_list) == 1:
+            sp_lsl, sp_tgt, sp_usl = parse_spec_from_col(y_list[0])
+            fig.add_hline(y=sp_usl, line_dash="dash", line_color="red", line_width=1.5,
+                          annotation_text=f" {sp_usl}", annotation_position="right", annotation_font_color="black")
+            fig.add_hline(y=sp_tgt, line_dash="dash", line_color="limegreen", line_width=1.5,
+                          annotation_text=f" {sp_tgt}", annotation_position="right", annotation_font_color="black")
+            fig.add_hline(y=sp_lsl, line_dash="dash", line_color="red", line_width=1.5,
+                          annotation_text=f" {sp_lsl}", annotation_position="right", annotation_font_color="black")
+            y_min = min(y_min, sp_lsl)
+            y_max = max(y_max, sp_usl)
 
         # --- สร้างแกน X หลายชั้น (Multi-level Hierarchy Labels & เส้นคั่นแบบ Minitab) ---
         n_levels = len(hierarchy_cols)
         innermost_ticks = [str(c[-1]) for c in combos]
-
-        # คำนวณระยะขอบล่างเผื่อให้ตัวหนังสือแต่ละชั้น
         bottom_margin = 55 + max(0, n_levels - 1) * 32
 
-        # วาดเลเบลและเส้นแบ่งกลุ่มสำหรับชั้นที่อยู่นอกสุดไล่ลงมา
-        # ลำดับใน hierarchy_cols: index 0 = นอกสุด (อยู่ล่างสุดของแกน X), index -1 = ในสุด (ติดแกน X)
         for lvl_idx in range(n_levels):
             col_label = hierarchy_cols[lvl_idx]
-            # ชื่อตัวแปรกลุ่มทางซ้ายมือของแต่ละชั้น
             if lvl_idx == n_levels - 1:
-                y_pos_paper = -0.06
+                y_pos_paper = -0.065
             else:
-                # ยิ่งชั้นนอก (lvl_idx น้อย) ยิ่งอยู่ต่ำลงมาเหมือน Minitab
                 depth_from_inner = (n_levels - 1) - lvl_idx
-                y_pos_paper = -0.06 - depth_from_inner * 0.085
+                y_pos_paper = -0.065 - depth_from_inner * 0.085
 
             fig.add_annotation(
                 x=-0.02, y=y_pos_paper,
@@ -1072,7 +1116,6 @@ else:
             )
 
             if lvl_idx < n_levels - 1:
-                # หาช่วงที่ค่าตั้งแต่ชั้น 0 ถึงชั้น lvl_idx เหมือนกันติดกัน (Run-length grouping)
                 run_start = 0
                 for i in range(1, n_positions + 1):
                     is_end = (i == n_positions) or (combos[i][:lvl_idx + 1] != combos[run_start][:lvl_idx + 1])
@@ -1087,21 +1130,16 @@ else:
                             showarrow=False, xanchor="center", yanchor="middle",
                             font=dict(size=12, color="#222222")
                         )
-                        # วาดเส้นคั่นกลุ่มแนวตั้งบนกราฟเมื่อเปลี่ยนกลุ่มชั้นนอก
-                        if i < n_positions and lvl_idx == 0:
+                        if i < n_positions:
                             fig.add_vline(
                                 x=run_end + 0.5,
-                                line_dash="dot", line_color="#AAAAAA", line_width=1.2
+                                line_dash="dot" if lvl_idx > 0 else "dash",
+                                line_color="#BBBBBB" if lvl_idx > 0 else "#888888",
+                                line_width=1.0 if lvl_idx > 0 else 1.3
                             )
                         run_start = i
 
-        y_min = long_df["Value"].min()
-        y_max = long_df["Value"].max()
-        if show_spec_nb and nb_usl is not None:
-            y_min = min(y_min, nb_lsl)
-            y_max = max(y_max, nb_usl)
         span = y_max - y_min if y_max > y_min else 0.003
-
         y_title_str = y_list[0] if len(y_list) == 1 else "Data"
         chart_title = f"Boxplot of {', '.join(y_list)}" + (f" ({title_suffix})" if title_suffix else "")
 
@@ -1124,7 +1162,7 @@ else:
             plot_bgcolor="white",
             paper_bgcolor="#E8E8E8",
             height=nb_chart_h,
-            margin=dict(l=95, r=70, t=55, b=bottom_margin)
+            margin=dict(l=90, r=60, t=55, b=bottom_margin)
         )
         fig.update_xaxes(showline=True, linewidth=1, linecolor="#999999", mirror=True)
         fig.update_yaxes(showline=True, linewidth=1, linecolor="#999999", mirror=True)
@@ -1132,17 +1170,16 @@ else:
         return fig, pd.DataFrame(summary_rows)
 
     # ==========================================================================
-    # สร้างรายการกราฟตามการตั้งค่า Panel / Multiple Y's
+    # สร้างรายการกราฟแยกตามพอยต์ B1, B2, B3...
     # ==========================================================================
     generated_charts = []
     all_summaries = []
 
     if not y_vars:
-        st.warning("กรุณาเลือกตัวแปร Graph variable (Y) อย่างน้อย 1 คอลัมน์")
+        st.warning("กรุณาเลือกพอยต์ Graph variable (Y) อย่างน้อย 1 คอลัมน์")
     else:
-        # กรณีแยก Panel ตามคอลัมน์ By variable
-        if split_by_col != "ไม่แยกกราฟย่อย" and split_by_col in work_df.columns:
-            panel_groups = list(work_df.groupby(split_by_col, sort=sort_groups_alpha))
+        if split_by_col != "ไม่แยกเพิ่ม" and split_by_col in work_df.columns:
+            panel_groups = list(work_df.groupby(split_by_col, sort=False))
         else:
             panel_groups = [(None, work_df)]
 
@@ -1155,23 +1192,20 @@ else:
                         tag = f"{y_single}" + (f"_{p_val}" if p_val is not None else "")
                         generated_charts.append((tag, fig_nb))
                         if not sum_df.empty:
-                            sum_df.insert(0, "Panel", tag)
                             all_summaries.append(sum_df)
             else:
                 fig_nb, sum_df = build_minitab_normal_boxplot(p_df, y_vars, group_vars, p_suffix)
                 if fig_nb is not None:
-                    tag = "_".join(y_vars) + (f"_{p_val}" if p_val is not None else "")
+                    tag = "_".join(y_vars[:3]) + (f"_{p_val}" if p_val is not None else "")
                     generated_charts.append((tag, fig_nb))
                     if not sum_df.empty:
-                        sum_df.insert(0, "Panel", p_suffix if p_suffix else "All")
                         all_summaries.append(sum_df)
 
-        # แสดงกราฟบนหน้าเว็บ
         if not generated_charts:
-            st.warning("ไม่มีข้อมูลที่ตรงตามเงื่อนไขสำหรับการวาด Boxplot")
+            st.warning("ไม่มีข้อมูลตัวเลขในคอลัมน์ที่เลือกสำหรับการวาด Boxplot")
         else:
             if len(generated_charts) == 1 and panel_cols_count == 1:
-                c_l, c_m, c_r = st.columns([0.4, 3.2, 0.4])
+                c_l, c_m, c_r = st.columns([0.3, 3.4, 0.3])
                 with c_m:
                     st.plotly_chart(generated_charts[0][1], use_container_width=True)
             else:
@@ -1180,7 +1214,6 @@ else:
                     with cols_ui[idx_c % panel_cols_count]:
                         st.plotly_chart(fig_obj, use_container_width=True)
 
-            # แสดงตารางสถิติสรุปรายกลุ่ม (N, Mean, StDev, Median, IQR)
             if all_summaries:
                 with st.expander("📊 ตารางสรุปค่าสถิติตามกลุ่ม (Descriptive Statistics)", expanded=False):
                     full_sum_df = pd.concat(all_summaries, ignore_index=True)
@@ -1194,7 +1227,7 @@ else:
         st.header("🖼️ ดาวน์โหลดรูปภาพ")
         nb_ec1, nb_ec2 = st.columns(2)
         with nb_ec1:
-            nb_exp_w = st.number_input("กว้าง (px)", min_value=400, max_value=2000, value=850, step=50, key="nb_w")
+            nb_exp_w = st.number_input("กว้าง (px)", min_value=400, max_value=2000, value=780, step=50, key="nb_w")
         with nb_ec2:
             nb_exp_h = st.number_input("สูง (px)", min_value=350, max_value=1400, value=int(nb_chart_h), step=20, key="nb_h")
 
@@ -1203,7 +1236,7 @@ else:
                 st.warning("ยังไม่มีกราฟให้ดาวน์โหลด")
             else:
                 try:
-                    with st.spinner("กำลังสร้างไฟล์รูปภาพ..."):
+                    with st.spinner(f"กำลังสร้างรูป {len(generated_charts)} กราฟ..."):
                         buf_nb = BytesIO()
                         with zipfile.ZipFile(buf_nb, "w", zipfile.ZIP_DEFLATED) as zf:
                             for idx_f, (t_name, f_obj) in enumerate(generated_charts, 1):
